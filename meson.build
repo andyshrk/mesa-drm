@@ -54,6 +54,7 @@ cc = meson.get_compiler('c')
 config.set10('HAVE_SECURE_GETENV', cc.has_function('secure_getenv'))
 
 android = cc.compiles('''int func() { return __ANDROID__; }''')
+add_global_arguments('-DLIBDRM_VERSION="@0@"'.format(meson.project_version()), language : 'c')
 
 # Solaris / Illumos
 if host_machine.system() == 'sunos'
