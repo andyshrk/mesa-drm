@@ -1839,6 +1839,7 @@ static void parse_fill_patterns(char *arg)
 
 static void usage(char *name)
 {
+	fprintf(stderr, "libdrm version: 2.4.101\n");
 	fprintf(stderr, "usage: %s [-acDdefMPpsCvw]\n", name);
 
 	fprintf(stderr, "\n Query options:\n\n");
