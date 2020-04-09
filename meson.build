@@ -45,6 +45,7 @@ dep_threads = dependency('threads')
 cc = meson.get_compiler('c')
 
 android = cc.compiles('''int func() { return __ANDROID__; }''')
+add_global_arguments('-DLIBDRM_VERSION="@0@"'.format(meson.project_version()), language : 'c')
 
 # Solaris / Illumos
 if host_machine.system() == 'sunos'

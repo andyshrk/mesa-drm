@@ -2129,6 +2129,7 @@ static void parse_fill_patterns(char *arg)
 static void usage(char *name)
 {
 	fprintf(stderr, "usage: %s [-acDdefMoPpsCvrw]\n", name);
+	fprintf(stderr, "libdrm version: %s\n", LIBDRM_VERSION);
 
 	fprintf(stderr, "\n Query options:\n\n");
 	fprintf(stderr, "\t-c\tlist connectors\n");
