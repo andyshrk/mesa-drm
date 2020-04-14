@@ -104,7 +104,7 @@ int main(int argc, char *argv[])
 	}
 
 	util_fill_pattern(fb->format, UTIL_PATTERN_SMPTE, &ptr, fb->width,
-			  fb->height, fb->pitch);
+			  fb->height, fb->pitch, 0);
 
 	kms_framebuffer_unmap(fb);
 

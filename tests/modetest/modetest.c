@@ -71,6 +71,8 @@
 static enum util_fill_pattern primary_fill = UTIL_PATTERN_SMPTE;
 static enum util_fill_pattern secondary_fill = UTIL_PATTERN_TILES;
 
+static int primary_value,secondary_value;
+
 struct crtc {
 	drmModeCrtc *crtc;
 	drmModeObjectProperties *props;
@@ -1154,7 +1156,7 @@ static void set_gamma(struct device *dev, unsigned crtc_id, unsigned fourcc)
 }
 
 static int atomic_set_plane(struct device *dev, struct plane_arg *p,
-							int pattern, bool update)
+							int pattern, bool update, int value)
 {
 	uint32_t handles[4] = {0}, pitches[4] = {0}, offsets[4] = {0};
 	struct bo *plane_bo;
@@ -1187,7 +1189,7 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p,
 
 	if (!plane_bo) {
 		plane_bo = bo_create(dev->fd, p->fourcc, p->w, p->h,
-				     handles, pitches, offsets, pattern);
+				     handles, pitches, offsets, pattern, value);
 
 		if (plane_bo == NULL)
 			return -1;
@@ -1287,7 +1289,7 @@ static int set_plane(struct device *dev, struct plane_arg *p)
 		p->w, p->h, p->format_str, plane_id);
 
 	plane_bo = bo_create(dev->fd, p->fourcc, p->w, p->h, handles,
-			     pitches, offsets, secondary_fill);
+			     pitches, offsets, secondary_fill, secondary_value);
 	if (plane_bo == NULL)
 		return -1;
 
@@ -1337,7 +1339,7 @@ static void atomic_set_planes(struct device *dev, struct plane_arg *p,
 		else
 			set_gamma(dev, p[i].crtc_id, p[i].fourcc);
 
-		if (atomic_set_plane(dev, &p[i], pattern, update))
+		if (atomic_set_plane(dev, &p[i], pattern, update, primary_value))
 			return;
 	}
 }
@@ -1478,7 +1480,7 @@ static void set_mode(struct device *dev, struct pipe_arg *pipes, unsigned int co
 
 	bo = bo_create(dev->fd, pipes[0].fourcc, dev->mode.width,
 		       dev->mode.height, handles, pitches, offsets,
-		       primary_fill);
+		       primary_fill, primary_value);
 	if (bo == NULL)
 		return;
 
@@ -1559,7 +1561,7 @@ static void set_cursors(struct device *dev, struct pipe_arg *pipes, unsigned int
 	 * translucent alpha
 	 */
 	bo = bo_create(dev->fd, DRM_FORMAT_ARGB8888, cw, ch, handles, pitches,
-		       offsets, UTIL_PATTERN_PLAIN);
+		       offsets, UTIL_PATTERN_PLAIN,0);
 	if (bo == NULL)
 		return;
 
@@ -1600,7 +1602,7 @@ static void test_page_flip(struct device *dev, struct pipe_arg *pipes, unsigned 
 
 	other_bo = bo_create(dev->fd, pipes[0].fourcc, dev->mode.width,
 			     dev->mode.height, handles, pitches, offsets,
-			     UTIL_PATTERN_PLAIN);
+			     UTIL_PATTERN_PLAIN, 0);
 	if (other_bo == NULL)
 		return;
 
@@ -1830,11 +1832,23 @@ static void parse_fill_patterns(char *arg)
 	char *fill = strtok(arg, ",");
 	if (!fill)
 		return;
-	primary_fill = util_pattern_enum(fill);
+	if (strstr(fill, "0x")) {
+		primary_fill = util_pattern_enum("solid");
+		primary_value = strtoul(fill, NULL, 16);
+	} else {
+		primary_fill = util_pattern_enum(fill);
+	}
+	printf("%s pattern: %d value %d\n", arg, primary_fill, primary_value);
 	fill = strtok(NULL, ",");
 	if (!fill)
 		return;
-	secondary_fill = util_pattern_enum(fill);
+	if (strstr(fill, "0x")) {
+		secondary_fill = util_pattern_enum("solid");
+		secondary_value = strtoul(fill, NULL, 16);
+	} else {
+		secondary_fill = util_pattern_enum(fill);
+	}
+
 }
 
 static void usage(char *name)

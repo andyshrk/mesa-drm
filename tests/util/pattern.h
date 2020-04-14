@@ -33,11 +33,12 @@ enum util_fill_pattern {
 	UTIL_PATTERN_PLAIN,
 	UTIL_PATTERN_SMPTE,
 	UTIL_PATTERN_GRADIENT,
+	UTIL_PATTERN_SOLID,
 };
 
 void util_fill_pattern(uint32_t format, enum util_fill_pattern pattern,
 		       void *planes[3], unsigned int width,
-		       unsigned int height, unsigned int stride);
+		       unsigned int height, unsigned int stride, int value);
 
 void util_smpte_c8_gamma(unsigned size, struct drm_color_lut *lut);
 
