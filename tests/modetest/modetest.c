@@ -72,6 +72,8 @@ static enum util_fill_pattern primary_fill = UTIL_PATTERN_SMPTE;
 static enum util_fill_pattern secondary_fill = UTIL_PATTERN_TILES;
 static drmModeModeInfo user_mode;
 
+static int primary_value,secondary_value;
+
 struct crtc {
 	drmModeCrtc *crtc;
 	drmModeObjectProperties *props;
@@ -1193,13 +1195,13 @@ static void set_gamma(struct device *dev, unsigned crtc_id, unsigned fourcc)
 
 static int
 bo_fb_create(int fd, unsigned int fourcc, const uint32_t w, const uint32_t h,
-             enum util_fill_pattern pat, struct bo **out_bo, unsigned int *out_fb_id)
+             enum util_fill_pattern pat, struct bo **out_bo, unsigned int *out_fb_id, int value)
 {
 	uint32_t handles[4] = {0}, pitches[4] = {0}, offsets[4] = {0};
 	struct bo *bo;
 	unsigned int fb_id;
 
-	bo = bo_create(fd, fourcc, w, h, handles, pitches, offsets, pat);
+	bo = bo_create(fd, fourcc, w, h, handles, pitches, offsets, pat, value);
 
 	if (bo == NULL)
 		return -1;
@@ -1215,7 +1217,7 @@ bo_fb_create(int fd, unsigned int fourcc, const uint32_t w, const uint32_t h,
 }
 
 static int atomic_set_plane(struct device *dev, struct plane_arg *p,
-							int pattern, bool update)
+							int pattern, bool update, int value)
 {
 	struct bo *plane_bo;
 	int crtc_x, crtc_y, crtc_w, crtc_h;
@@ -1240,7 +1242,7 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p,
 
 	if (!plane_bo) {
 		if (bo_fb_create(dev->fd, p->fourcc, p->w, p->h,
-                         pattern, &plane_bo, &p->fb_id))
+                         pattern, &plane_bo, &p->fb_id, value))
 			return -1;
 	}
 
@@ -1322,7 +1324,7 @@ static int set_plane(struct device *dev, struct plane_arg *p)
 
 	/* just use single plane format for now.. */
 	if (bo_fb_create(dev->fd, p->fourcc, p->w, p->h,
-	                 secondary_fill, &p->bo, &p->fb_id))
+	                 secondary_fill, &p->bo, &p->fb_id, secondary_value))
 		return -1;
 
 	crtc_w = p->w * p->scale;
@@ -1362,7 +1364,7 @@ static void atomic_set_planes(struct device *dev, struct plane_arg *p,
 		else
 			set_gamma(dev, p[i].crtc_id, p[i].fourcc);
 
-		if (atomic_set_plane(dev, &p[i], pattern, update))
+		if (atomic_set_plane(dev, &p[i], pattern, update, primary_value))
 			return;
 	}
 }
@@ -1665,7 +1667,7 @@ static unsigned int set_mode(struct device *dev, struct pipe_arg **pipe_args, un
 		}
 
 		if (bo_fb_create(dev->fd, pipes[0].fourcc, dev->mode.width, dev->mode.height,
-			             primary_fill, &dev->mode.bo, &dev->mode.fb_id))
+			             primary_fill, &dev->mode.bo, &dev->mode.fb_id, primary_value))
 			return 0;
 	}
 
@@ -1746,7 +1748,7 @@ static void writeback_config(struct device *dev, struct pipe_arg *pipes, unsigne
 				bo_fb_create(dev->fd, pipes[j].fourcc,
 					     pipe->mode->hdisplay, pipe->mode->vdisplay,
 					     UTIL_PATTERN_PLAIN,
-					     &pipe->out_bo, &pipe->out_fb_id);
+					     &pipe->out_bo, &pipe->out_fb_id, 0);
 				add_property(dev, pipe->con_ids[i], "WRITEBACK_FB_ID",
 					     pipe->out_fb_id);
 				add_property(dev, pipe->con_ids[i], "WRITEBACK_OUT_FENCE_PTR",
@@ -1857,7 +1859,7 @@ static void set_cursors(struct device *dev, struct pipe_arg *pipes, unsigned int
 	 * translucent alpha
 	 */
 	bo = bo_create(dev->fd, DRM_FORMAT_ARGB8888, cw, ch, handles, pitches,
-		       offsets, UTIL_PATTERN_PLAIN);
+		       offsets, UTIL_PATTERN_PLAIN,0);
 	if (bo == NULL)
 		return;
 
@@ -1896,7 +1898,7 @@ static void test_page_flip(struct device *dev, struct pipe_arg *pipes, unsigned 
 	int ret;
 
 	if (bo_fb_create(dev->fd, pipes[0].fourcc, dev->mode.width, dev->mode.height,
-	                 UTIL_PATTERN_PLAIN, &other_bo, &other_fb_id))
+	                 UTIL_PATTERN_PLAIN, &other_bo, &other_fb_id, 0))
 		return;
 
 	for (i = 0; i < count; i++) {
@@ -2119,11 +2121,23 @@ static void parse_fill_patterns(char *arg)
 	char *fill = strtok(arg, ",");
 	if (!fill)
 		return;
-	primary_fill = util_pattern_enum(fill);
+	if (strstr(fill, "0x")) {
+		primary_fill = util_pattern_enum("solid");
+		primary_value = strtoul(fill, NULL, 16);
+	} else {
+		primary_fill = util_pattern_enum(fill);
+	}
+	printf("%s pattern: %d value %d\n", arg, primary_fill, primary_value);
 	fill = strtok(NULL, ",");
 	if (!fill)
 		return;
-	secondary_fill = util_pattern_enum(fill);
+	if (strstr(fill, "0x")) {
+		secondary_fill = util_pattern_enum("solid");
+		secondary_value = strtoul(fill, NULL, 16);
+	} else {
+		secondary_fill = util_pattern_enum(fill);
+	}
+
 }
 
 static void usage(char *name)
