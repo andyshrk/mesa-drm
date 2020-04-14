@@ -36,11 +36,13 @@ enum util_fill_pattern {
 	UTIL_PATTERN_NOISE,
 	UTIL_PATTERN_NOISE_COLOR,
 	UTIL_PATTERN_BLACK_WHITE,
+	UTIL_PATTERN_SOLID,
 };
 
 void util_fill_pattern(uint32_t format, enum util_fill_pattern pattern,
 		       void *planes[3], unsigned int width,
-		       unsigned int height, unsigned int stride, unsigned long seed);
+		       unsigned int height, unsigned int stride, unsigned long seed,
+		       int value);
 
 void util_smpte_fill_lut(unsigned int ncolors, struct drm_color_lut *lut);
 
