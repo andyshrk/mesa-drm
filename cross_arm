@@ -1,0 +1,16 @@
+[paths]
+prefix = '/srv/WorkSpace/opensource/drm/installdir'
+
+[binaries]
+c = '/usr/local/toolchain/gcc-linaro-6.3.1_arm-linux-gnueabihf/bin/arm-linux-gnueabihf-gcc'
+cpp = '/usr/local/toolchain/gcc-linaro-6.3.1_arm-linux-gnueabihf/bin/arm-linux-gnueabihf-g++'
+ar = '/usr/local/toolchain/gcc-linaro-6.3.1_arm-linux-gnueabihf/bin/arm-linux-gnueabihf-ar'
+strip = '/usr/local/toolchain/gcc-linaro-6.3.1_arm-linux-gnueabihf/bin/arm-linux-gnueabihf-strip'
+pkgconfig = '/usr/bin/pkg-config'
+
+[host_machine]
+system = 'linux'
+cpu_family = 'arm'
+cpu = 'arm'
+endian = 'little'
+
