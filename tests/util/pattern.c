@@ -1006,6 +1006,25 @@ static void fill_tiles_rgb16fp(const struct util_format_info *info, void *mem,
 	}
 }
 
+static void fill_solid_rgb24(const struct util_rgb_info *rgb, void *mem,
+			     unsigned int width, unsigned int height,
+			     unsigned int stride, unsigned int value)
+{
+	uint8_t r = (value & 0xff0000) >> 16;
+	uint8_t g = (value & 0xff00) >> 8;
+	uint8_t b = value & 0xff;
+	struct color_rgb24 colors = MAKE_RGB24(rgb, r, g, b);
+
+	unsigned int x;
+	unsigned int y;
+	for (y = 0; y < height; ++y) {
+		for (x = 0; x < width; ++x)
+			((struct color_rgb24 *)mem)[x] = colors;
+
+		mem += stride;
+	}
+}
+
 static void fill_solid_rgb32(const struct util_rgb_info *rgb, void *mem,
 			     unsigned int width, unsigned int height,
 			     unsigned int stride, int value)
@@ -1066,8 +1085,8 @@ static void fill_solid(const struct util_format_info *info, void *planes[3],
 		return;
 	case DRM_FORMAT_BGR888:
 	case DRM_FORMAT_RGB888:
-		printf("unsupport solid yuyv\n");
-		return;
+		return fill_solid_rgb24(&info->rgb, planes[0],
+					width, height, stride, value);
 	case DRM_FORMAT_ARGB8888:
 	case DRM_FORMAT_XRGB8888:
 	case DRM_FORMAT_ABGR8888:
