@@ -2127,7 +2127,7 @@ static void parse_fill_patterns(char *arg)
 	} else {
 		primary_fill = util_pattern_enum(fill);
 	}
-	printf("%s pattern: %d value %d\n", arg, primary_fill, primary_value);
+	printf("%s pattern: %d value: 0x%x\n", arg, primary_fill, primary_value);
 	fill = strtok(NULL, ",");
 	if (!fill)
 		return;
