@@ -1431,6 +1431,7 @@ static void usage(char *name)
 	fprintf(stderr, "\t-s <connector_id>[,<connector_id>][@<crtc_id>]:[#<mode index>]<mode>[-<vrefresh>][@<format>]\tset a mode\n");
 	fprintf(stderr, "\t-C\ttest hw cursor\n");
 	fprintf(stderr, "\t-v\ttest vsynced page flipping\n");
+	fprintf(stderr, "\t-o\ttest dynamic turn on off plane one by one, run with -v mode\n");
 	fprintf(stderr, "\t-w <obj_id>:<prop_name>:<value>\tset property\n");
 	fprintf(stderr, "\t-a \tuse atomic API\n");
 	fprintf(stderr, "\t-F pattern1,pattern2\tspecify fill patterns\n");
@@ -1470,7 +1471,7 @@ static int pipe_resolve_connectors(struct device *dev, struct pipe_arg *pipe)
 	return 0;
 }
 
-static char optstr[] = "acdD:efF:M:P:ps:Cvw:";
+static char optstr[] = "acdD:efF:M:P:ps:Cvw:o";
 
 int main(int argc, char **argv)
 {
@@ -1481,6 +1482,7 @@ int main(int argc, char **argv)
 	int drop_master = 0;
 	int test_vsync = 0;
 	int use_atomic = 0;
+	int dynamic_onoff = 0;
 	char *device = NULL;
 	char *module = NULL;
 	unsigned int i;
@@ -1488,8 +1490,12 @@ int main(int argc, char **argv)
 	unsigned int prop_count = 0;
 	struct pipe_arg *pipe_args = NULL;
 	struct plane_arg *plane_args = NULL;
+	struct plane_arg *c_plane_args = NULL;
 	struct property_arg *prop_args = NULL;
 	unsigned int args = 0;
+	unsigned int c_plane_count = 0;
+	unsigned int c_count = 0;
+	bool c_increase_mode;
 	int ret;
 
 	memset(&dev, 0, sizeof dev);
@@ -1525,6 +1531,9 @@ int main(int argc, char **argv)
 			module = optarg;
 			/* Preserve the default behaviour of dumping all information. */
 			args--;
+			break;
+		case 'o':
+			dynamic_onoff = 1;
 			break;
 		case 'P':
 			plane_args = realloc(plane_args,
@@ -1650,11 +1659,26 @@ int main(int argc, char **argv)
 		gettimeofday(&pipe_args->start, NULL);
 		pipe_args->swap_count = 0;
 
+		if (test_vsync) {
+			c_plane_args = calloc(1, plane_count * sizeof(*c_plane_args));
+			if (c_plane_args == NULL) {
+				fprintf(stderr, "memory allocation for commit plane args failed\n");
+				return 1;
+			}
+			c_plane_count = 1;
+			c_increase_mode = true;
+		}
+
 		while (test_vsync) {
 			drmModeAtomicFree(dev.req);
 			dev.req = drmModeAtomicAlloc();
-			atomic_set_planes(&dev, plane_args, plane_count, true);
-
+			if (dynamic_onoff) {
+				memcpy(c_plane_args, plane_args, sizeof(*c_plane_args));
+				atomic_set_planes(&dev, plane_args, c_plane_count, true);
+				atomic_clear_planes(&dev, &plane_args[c_plane_count], plane_count - c_plane_count);
+			} else {
+				atomic_set_planes(&dev, plane_args, plane_count, true);
+			}
 			ret = drmModeAtomicCommit(dev.fd, dev.req, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
 			if (ret) {
 				fprintf(stderr, "Atomic Commit failed [2]\n");
@@ -1672,6 +1696,23 @@ int main(int argc, char **argv)
 				fprintf(stderr, "freq: %.02fHz\n", pipe_args->swap_count / t);
 				pipe_args->swap_count = 0;
 				pipe_args->start = end;
+
+				c_count++;
+				/* turn on or off plane one by one every 30s */
+				if (c_count == 1) {
+					c_count = 0;
+					if (c_increase_mode)
+						c_plane_count++;
+					else
+						c_plane_count--;
+
+					if (c_plane_count >= plane_count) {
+						c_increase_mode = false; /* decrease plane one by one*/
+					}
+
+					if (c_plane_count == 1)
+						c_increase_mode = true;
+				}
 			}
 		}
 
