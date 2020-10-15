@@ -825,6 +825,7 @@ struct plane_arg {
 	uint32_t plane_id;  /* the id of plane to use */
 	uint32_t crtc_id;  /* the id of CRTC to bind to */
 	bool has_position;
+	bool afbc_en;
 	int32_t x, y;
 	uint32_t w, h;
 	double scale;
@@ -1077,6 +1078,8 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p, const char 
 	struct crtc *crtc = NULL;
 	unsigned int i;
 	unsigned int old_fb_id;
+	uint64_t modifiers[4] = {0, 0, 0, 0};
+	int ret;
 
 	/* Find an unused plane which can be connected to our CRTC. Find the
 	 * CRTC index first, then iterate over available planes.
@@ -1107,8 +1110,16 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p, const char 
 		if (plane_bo == NULL)
 			return -1;
 
-		if (drmModeAddFB2(dev->fd, p->w, p->h, p->fourcc,
-			handles, pitches, offsets, &p->fb_id, 0)) {
+		if (p->afbc_en) {
+			modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC(1);
+			ret = drmModeAddFB2WithModifiers(dev->fd, p->w, p->h, p->fourcc, handles, pitches,
+						   offsets, modifiers, &p->fb_id, DRM_MODE_FB_MODIFIERS);
+		} else {
+			ret = drmModeAddFB2(dev->fd, p->w, p->h, p->fourcc,
+					    handles, pitches, offsets, &p->fb_id, 0);
+		}
+
+		if (ret) {
 			fprintf(stderr, "failed to add fb: %s\n", strerror(errno));
 			return -1;
 		}
@@ -1376,6 +1387,9 @@ static int parse_plane(struct plane_arg *plane, const char *p)
 	if (*end == '@') {
 		strncpy(plane->format_str, end + 1, 4);
 		plane->format_str[4] = '\0';
+		if (strstr(end + 5, "@afbc"))
+			plane->afbc_en = true;
+
 	} else {
 		strcpy(plane->format_str, "XR24");
 	}
@@ -1427,7 +1441,7 @@ static void usage(char *name)
 	fprintf(stderr, "\t-p\tlist CRTCs and planes (pipes)\n");
 
 	fprintf(stderr, "\n Test options:\n\n");
-	fprintf(stderr, "\t-P <plane_id>@<crtc_id>:<w>x<h>[+<x>+<y>][*<scale>][@<format>]\tset a plane\n");
+	fprintf(stderr, "\t-P <plane_id>@<crtc_id>:<w>x<h>[+<x>+<y>][*<scale>][@<format>][@afbc]\tset a plane\n");
 	fprintf(stderr, "\t-s <connector_id>[,<connector_id>][@<crtc_id>]:[#<mode index>]<mode>[-<vrefresh>][@<format>]\tset a mode\n");
 	fprintf(stderr, "\t-C\ttest hw cursor\n");
 	fprintf(stderr, "\t-v\ttest vsynced page flipping\n");

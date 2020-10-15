@@ -132,7 +132,6 @@ ovl_bo_create(int fd, unsigned int format,
 	unsigned int virtual_height;
 	struct bo *bo;
 	unsigned int bpp;
-	void *planes[3] = { 0, };
 	void *virtual;
 	int ret;
 	int pic_fd;
@@ -251,7 +250,6 @@ ovl_bo_create(int fd, unsigned int format,
 		handles[0] = bo->handle;
 		pitches[0] = bo->pitch;
 
-		planes[0] = virtual;
 		break;
 
 	case DRM_FORMAT_NV12:
@@ -265,8 +263,6 @@ ovl_bo_create(int fd, unsigned int format,
 		offsets[1] = pitches[0] * height;
 		handles[1] = bo->handle;
 
-		planes[0] = virtual;
-		planes[1] = virtual + offsets[1];
 		break;
 
 	case DRM_FORMAT_YUV420:
@@ -281,9 +277,6 @@ ovl_bo_create(int fd, unsigned int format,
 		offsets[2] = offsets[1] + pitches[1] * height / 2;
 		handles[2] = bo->handle;
 
-		planes[0] = virtual;
-		planes[1] = virtual + offsets[1];
-		planes[2] = virtual + offsets[2];
 		break;
 
 	case DRM_FORMAT_C8:
@@ -331,7 +324,6 @@ ovl_bo_create(int fd, unsigned int format,
 		handles[0] = bo->handle;
 		pitches[0] = bo->pitch;
 
-		planes[0] = virtual;
 		break;
 	}
 
