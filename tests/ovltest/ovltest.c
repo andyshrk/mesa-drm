@@ -78,6 +78,7 @@
 char pic_name[PIC_MAX_CNT][PIC_NAME_MAX_LEN];
 
 static unsigned int pic_cnt;
+static unsigned int zpos;
 
 struct crtc {
 	drmModeCrtc *crtc;
@@ -829,6 +830,7 @@ struct plane_arg {
 	int32_t rotation;
 	int32_t x, y;
 	uint32_t w, h;
+	uint32_t zpos;
 	double scale;
 	unsigned int fb_id;
 	unsigned int old_fb_id;
@@ -1158,6 +1160,7 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p, const char 
 	add_property(dev, p->plane_id, "CRTC_W", crtc_w);
 	add_property(dev, p->plane_id, "CRTC_H", crtc_h);
 	add_property(dev, p->plane_id, "rotation", p->rotation);
+	add_property(dev, p->plane_id, "zpos", p->zpos);
 
 	return 0;
 }
@@ -1411,6 +1414,8 @@ static int parse_plane(struct plane_arg *plane, const char *p)
 		plane->rotation |= DRM_MODE_ROTATE_270;
 	else
 		plane->rotation |= DRM_MODE_ROTATE_0;
+
+	plane->zpos = zpos++;
 
 	plane->fourcc = util_format_fourcc(plane->format_str);
 	if (plane->fourcc == 0) {
