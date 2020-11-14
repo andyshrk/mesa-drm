@@ -819,6 +819,7 @@ struct plane_arg {
 	uint32_t plane_id;  /* the id of plane to use */
 	uint32_t crtc_id;  /* the id of CRTC to bind to */
 	bool has_position;
+	int32_t rotation;
 	int32_t x, y;
 	uint32_t w, h;
 	double scale;
@@ -1206,8 +1207,14 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p,
 	old_fb_id = p->fb_id;
 	p->old_fb_id = old_fb_id;
 
-	crtc_w = p->w * p->scale;
-	crtc_h = p->h * p->scale;
+	if (p->rotation & (DRM_MODE_ROTATE_90 | DRM_MODE_ROTATE_270)) {
+		crtc_w = p->h * p->scale;
+		crtc_h = p->w * p->scale;
+	} else {
+		crtc_w = p->w * p->scale;
+		crtc_h = p->h * p->scale;
+	}
+
 	if (!p->has_position) {
 		/* Default to the middle of the screen */
 		crtc_x = (crtc->mode->hdisplay - crtc_w) / 2;
@@ -1227,7 +1234,7 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p,
 	add_property(dev, p->plane_id, "CRTC_Y", crtc_y);
 	add_property(dev, p->plane_id, "CRTC_W", crtc_w);
 	add_property(dev, p->plane_id, "CRTC_H", crtc_h);
-
+	add_property(dev, p->plane_id, "rotation", p->rotation);
 	return 0;
 }
 
@@ -1807,10 +1814,21 @@ static int parse_plane(struct plane_arg *plane, const char *p)
 		strcpy(plane->format_str, "XR24");
 	}
 
+	if (strstr(end, "@rotatex"))
+		plane->rotation |= DRM_MODE_REFLECT_X;
+	if (strstr(end, "@rotatey"))
+		plane->rotation |= DRM_MODE_REFLECT_Y;
+	if (strstr(end, "@rotate90"))
+		plane->rotation |= DRM_MODE_ROTATE_90;
+	else if (strstr(end, "@rotate270"))
+		plane->rotation |= DRM_MODE_ROTATE_270;
+	else
+		plane->rotation |= DRM_MODE_ROTATE_0;
+
 	plane->fourcc = util_format_fourcc(plane->format_str);
 	if (plane->fourcc == 0) {
-		fprintf(stderr, "unknown format %s\n", plane->format_str);
-		return -EINVAL;
+		fprintf(stderr, "unknown format %s, use XR24 as default\n", plane->format_str);
+		plane->fourcc = DRM_FORMAT_XRGB8888;
 	}
 
 	return 0;
@@ -1863,7 +1881,7 @@ static void usage(char *name)
 	fprintf(stderr, "\t-p\tlist CRTCs and planes (pipes)\n");
 
 	fprintf(stderr, "\n Test options:\n\n");
-	fprintf(stderr, "\t-P <plane_id>@<crtc_id>:<w>x<h>[+<x>+<y>][*<scale>][@<format>]\tset a plane\n");
+	fprintf(stderr, "\t-P <plane_id>@<crtc_id>:<w>x<h>[+<x>+<y>][*<scale>][@<format>][@rotatex/y/90/270]\tset a plane\n");
 	fprintf(stderr, "\t-s <connector_id>[,<connector_id>][@<crtc_id>]:[#<mode index>]<mode>[-<vrefresh>][@<format>]\tset a mode\n");
 	fprintf(stderr, "\t-C\ttest hw cursor\n");
 	fprintf(stderr, "\t-v\ttest vsynced page flipping\n");
