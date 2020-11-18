@@ -1073,6 +1073,21 @@ static void add_property(struct device *dev, uint32_t obj_id,
 	set_property(dev, &p);
 }
 
+static int get_plane_num(unsigned int format)
+{
+	switch (format) {
+	case DRM_FORMAT_NV12:
+	case DRM_FORMAT_NV21:
+	case DRM_FORMAT_NV16:
+	case DRM_FORMAT_NV61:
+		return 2;
+		break;
+	default:
+		return 1;
+		break;
+	};
+}
+
 static int atomic_set_plane(struct device *dev, struct plane_arg *p, const char *file_name, bool update)
 {
 	uint32_t handles[4] = {0}, pitches[4] = {0}, offsets[4] = {0};
@@ -1115,6 +1130,8 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p, const char 
 
 		if (p->afbc_en) {
 			modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC(1);
+			if (get_plane_num(p->fourcc) == 2)
+				modifiers[1] = DRM_FORMAT_MOD_ARM_AFBC(1);
 			ret = drmModeAddFB2WithModifiers(dev->fd, p->w, p->h, p->fourcc, handles, pitches,
 						   offsets, modifiers, &p->fb_id, DRM_MODE_FB_MODIFIERS);
 		} else {
