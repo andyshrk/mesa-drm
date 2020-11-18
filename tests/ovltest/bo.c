@@ -135,6 +135,7 @@ ovl_bo_create(int fd, unsigned int format,
 	void *virtual;
 	int ret;
 	int pic_fd;
+	unsigned int size;
 
 	switch (format) {
 	case DRM_FORMAT_C8:
@@ -332,7 +333,8 @@ ovl_bo_create(int fd, unsigned int format,
 	if (pic_fd < 0)
 		fprintf(stderr, "open %s failed: %s\n", pic_name, strerror(errno));
 	else
-		read(pic_fd, virtual, bo->pitch * height);
+		read(pic_fd, virtual, bo->pitch * virtual_height);
+	fprintf(stderr, "Read image data %d x %d bytes\n", bo->pitch, virtual_height);
 	bo_unmap(bo);
 
 	return bo;
