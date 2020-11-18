@@ -822,6 +822,7 @@ struct plane_arg {
 	int32_t rotation;
 	int32_t x, y;
 	uint32_t w, h;
+	uint32_t crtc_w, crtc_h;
 	double scale;
 	unsigned int fb_id;
 	unsigned int old_fb_id;
@@ -1309,8 +1310,8 @@ static int set_plane(struct device *dev, struct plane_arg *p)
 		return -1;
 	}
 
-	crtc_w = p->w * p->scale;
-	crtc_h = p->h * p->scale;
+	crtc_w = p->crtc_w ? p->crtc_w : p->w * p->scale;
+	crtc_h = p->crtc_h ? p->crtc_h : p->h * p->scale;
 	if (!p->has_position) {
 		/* Default to the middle of the screen */
 		crtc_x = (crtc->mode->hdisplay - crtc_w) / 2;
@@ -1788,6 +1789,20 @@ static int parse_plane(struct plane_arg *plane, const char *p)
 
 	p = end + 1;
 	plane->h = strtoul(p, &end, 10);
+	if (*end == ':') {
+		p = end + 1;
+		plane->crtc_w = strtoul(p, &end, 10);
+		if (*end != 'x') {
+			fprintf(stderr, "invalid crtc_w/h argument\n");
+			return -EINVAL;
+		}
+
+		p = end + 1;
+		plane->crtc_h = strtoul(p, &end, 10);
+	} else {
+		plane->crtc_w = plane->w;
+		plane->crtc_h = plane->h;
+	}
 
 	if (*end == '+' || *end == '-') {
 		plane->x = strtol(end, &end, 10);
@@ -1881,7 +1896,7 @@ static void usage(char *name)
 	fprintf(stderr, "\t-p\tlist CRTCs and planes (pipes)\n");
 
 	fprintf(stderr, "\n Test options:\n\n");
-	fprintf(stderr, "\t-P <plane_id>@<crtc_id>:<w>x<h>[+<x>+<y>][*<scale>][@<format>][@rotatex/y/90/270]\tset a plane\n");
+	fprintf(stderr, "\t-P <plane_id>@<crtc_id>:<w>x<h>:<crtc_w>x<crtc_h>[+<x>+<y>][*<scale>][@<format>][@rotatex/y/90/270]\tset a plane\n");
 	fprintf(stderr, "\t-s <connector_id>[,<connector_id>][@<crtc_id>]:[#<mode index>]<mode>[-<vrefresh>][@<format>]\tset a mode\n");
 	fprintf(stderr, "\t-C\ttest hw cursor\n");
 	fprintf(stderr, "\t-v\ttest vsynced page flipping\n");
