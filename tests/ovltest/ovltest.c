@@ -1080,6 +1080,7 @@ static int get_plane_num(unsigned int format)
 	case DRM_FORMAT_NV21:
 	case DRM_FORMAT_NV16:
 	case DRM_FORMAT_NV61:
+	case DRM_FORMAT_NV12_10:
 		return 2;
 		break;
 	default:
