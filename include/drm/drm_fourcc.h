@@ -326,6 +326,8 @@ extern "C" {
 #define DRM_FORMAT_NV20		fourcc_code('N', 'V', '2', '0') /* 2x1 subsampled Cr:Cb plane */
 #define DRM_FORMAT_NV30		fourcc_code('N', 'V', '3', '0') /* non-subsampled Cr:Cb plane */
 
+#define DRM_FORMAT_NV12_10      fourcc_code('N', 'A', '1', '2') /* 2x2 subsampled Cr:Cb plane */
+
 /*
  * 2 plane YCbCr MSB aligned
  * index 0 = Y plane, [15:0] Y:x [10:6] little endian
