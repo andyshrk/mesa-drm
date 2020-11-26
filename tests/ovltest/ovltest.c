@@ -1123,7 +1123,7 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p, const char 
 	p->old_bo = p->bo;
 
 	if (!plane_bo) {
-		plane_bo = ovl_bo_create(dev->fd, p->fourcc, 4864, 2176,
+		plane_bo = ovl_bo_create(dev->fd, p->fourcc, p->w, p->h,
 				     handles, pitches, offsets, file_name);
 
 		if (plane_bo == NULL)
@@ -1133,7 +1133,7 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p, const char 
 			modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC(1);
 			if (get_plane_num(p->fourcc) == 2)
 				modifiers[1] = DRM_FORMAT_MOD_ARM_AFBC(1);
-			ret = drmModeAddFB2WithModifiers(dev->fd, 4864, 2176, p->fourcc, handles, pitches,
+			ret = drmModeAddFB2WithModifiers(dev->fd, p->w, p->h, p->fourcc, handles, pitches,
 						   offsets, modifiers, &p->fb_id, DRM_MODE_FB_MODIFIERS);
 		} else {
 			ret = drmModeAddFB2(dev->fd, p->w, p->h, p->fourcc,
