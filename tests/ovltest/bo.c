@@ -42,15 +42,6 @@
 
 #include "bo.h"
 
-struct bo
-{
-	int fd;
-	void *ptr;
-	size_t size;
-	size_t offset;
-	size_t pitch;
-	unsigned handle;
-};
 
 /* -----------------------------------------------------------------------------
  * Buffers management
@@ -333,14 +324,20 @@ ovl_bo_create(int fd, unsigned int format,
 		break;
 	}
 
-	pic_fd = open(pic_name, O_RDONLY);
+	/*
+	 * when no pic, the buffer is for write back;
+	 */
+	if (pic_name) {
+		pic_fd = open(pic_name, O_RDONLY);
 
-	if (pic_fd < 0)
-		fprintf(stderr, "open %s failed: %s\n", pic_name, strerror(errno));
-	else
-		read(pic_fd, virtual, bo->pitch * virtual_height);
-	fprintf(stderr, "Read image data %d x %d bytes\n", bo->pitch, virtual_height);
-	bo_unmap(bo);
+		if (pic_fd < 0)
+			fprintf(stderr, "open %s failed: %s\n", pic_name, strerror(errno));
+		else
+			read(pic_fd, virtual, bo->pitch * virtual_height);
+		fprintf(stderr, "Read image data %d x %d bytes\n", bo->pitch, virtual_height);
+		bo_unmap(bo);
+	}
+
 
 	return bo;
 }

@@ -40,6 +40,7 @@
 
 #include <assert.h>
 #include <ctype.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -640,6 +641,7 @@ static struct resources *get_resources(struct device *dev)
 		return NULL;
 
 	drmSetClientCap(dev->fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
+	drmSetClientCap(dev->fd, DRM_CLIENT_CAP_WRITEBACK_CONNECTORS, 1);
 
 	res->res = drmModeGetResources(dev->fd);
 	if (!res->res) {
@@ -816,7 +818,12 @@ struct pipe_arg {
 	unsigned int fourcc;
 	drmModeModeInfo *mode;
 	struct crtc *crtc;
-	unsigned int fb_id[2], current_fb_id;
+
+	/* Is write back connector */
+	bool wbc;
+	struct bo *bo;
+	struct bo *old_bo;
+	unsigned int fb_id, old_fb_id;
 	struct timeval start;
 
 	int swap_count;
@@ -1241,6 +1248,93 @@ static void atomic_clear_FB(struct device *dev, struct plane_arg *p, unsigned in
 	}
 }
 
+static int atomic_add_wbc_fb(struct device *dev, struct pipe_arg *pipe)
+{
+	uint32_t handles[4] = {0}, pitches[4] = {0}, offsets[4] = {0};
+	uint32_t w, h;
+	struct bo *pipe_bo;
+	int ret;
+
+	pipe_bo = pipe->old_bo;
+	pipe->old_bo = pipe->bo;
+
+	w = pipe->mode->hdisplay;
+	h =  pipe->mode->vdisplay;
+	if (!pipe_bo) {
+
+		pipe_bo = ovl_bo_create(dev->fd, pipe->fourcc, w, h,
+					handles, pitches, offsets, NULL);
+
+		if (pipe_bo == NULL)
+			return -1;
+
+		ret = drmModeAddFB2(dev->fd, w, h, pipe->fourcc,
+					handles, pitches, offsets, &pipe->fb_id, 0);
+
+		if (ret) {
+			fprintf(stderr, "failed to add fb: %s\n", strerror(errno));
+			return -1;
+		}
+		pipe->bo = pipe_bo;
+	}
+
+	return 0;
+
+}
+
+static int get_bpp(int fourcc)
+{
+	int bpp = 0;
+
+	switch (fourcc)
+	{
+	case DRM_FORMAT_NV12:
+		bpp = 12;
+		break;
+	case DRM_FORMAT_RGB565:
+		bpp = 16;
+		break;
+	case DRM_FORMAT_RGB888:
+		bpp = 24;
+		break;
+	case DRM_FORMAT_ARGB8888:
+		bpp = 32;
+		break;
+	default:
+		fprintf(stderr, "unsupported format: %x\n", fourcc);
+	}
+	return bpp;
+}
+
+static void write_wb_file(struct pipe_arg *pipes, unsigned int count)
+{
+	unsigned int i;
+	unsigned int w, h;
+	int fd;
+
+	for (i = 0; i < count; i++) {
+		struct pipe_arg *pipe = &pipes[i];
+		w = pipe->mode->hdisplay;
+		h =  pipe->mode->vdisplay;
+
+		if (pipe->wbc) {
+			/*
+			 * wait for writeback complete.
+			 */
+			sleep(1);
+			fd = open("/data/wb.bin", O_WRONLY| O_TRUNC | O_CREAT, 0666);
+			if (fd == -1) {
+				printf("Failed to open wb file : %s\n", strerror(errno));
+				return;
+			}
+			printf("write data to /data/wb.bin ...");
+			write(fd, pipe->bo->ptr, w * h * get_bpp(pipe->fourcc)>>3);
+			printf("done\n");
+		}
+	}
+
+}
+
 static void atomic_set_mode(struct device *dev, struct pipe_arg *pipes, unsigned int count)
 {
 	unsigned int i;
@@ -1268,10 +1362,16 @@ static void atomic_set_mode(struct device *dev, struct pipe_arg *pipes, unsigned
 			add_property(dev, pipe->con_ids[j], "CRTC_ID", pipe->crtc->crtc->crtc_id);
 		}
 		printf("crtc %d\n", pipe->crtc->crtc->crtc_id);
+		if (pipe->wbc) {
+			atomic_add_wbc_fb(dev, pipe);
+			printf("write back connector fb_id :%d\n", pipe->fb_id);
+			add_property(dev, pipe->con_ids[0], "WRITEBACK_FB_ID", pipe->fb_id);
+		} else {
 
-		drmModeCreatePropertyBlob(dev->fd, pipe->mode, sizeof(*pipe->mode), &blob_id);
-		add_property(dev, pipe->crtc->crtc->crtc_id, "MODE_ID", blob_id);
-		add_property(dev, pipe->crtc->crtc->crtc_id, "ACTIVE", 1);
+			drmModeCreatePropertyBlob(dev->fd, pipe->mode, sizeof(*pipe->mode), &blob_id);
+			add_property(dev, pipe->crtc->crtc->crtc_id, "MODE_ID", blob_id);
+			add_property(dev, pipe->crtc->crtc->crtc_id, "ACTIVE", 1);
+		}
 	}
 }
 
@@ -1362,6 +1462,9 @@ static int parse_connector(struct pipe_arg *pipe, const char *arg)
 	if (*p == '@') {
 		strncpy(pipe->format_str, p + 1, 4);
 		pipe->format_str[4] = '\0';
+		if (strstr(p + 5, "@WBC"))
+			pipe->wbc = true;
+
 	}
 
 	pipe->fourcc = util_format_fourcc(pipe->format_str);
@@ -1713,6 +1816,7 @@ int main(int argc, char **argv)
 
 		gettimeofday(&pipe_args->start, NULL);
 		pipe_args->swap_count = 0;
+		write_wb_file(pipe_args, count);
 
 		if (test_vsync) {
 			c_plane_args = calloc(1, plane_count * sizeof(*c_plane_args));
