@@ -29,7 +29,15 @@
 
 #include "util/pattern.h"
 
-struct bo;
+struct bo
+{
+	int fd;
+	void *ptr;
+	size_t size;
+	size_t offset;
+	size_t pitch;
+	unsigned handle;
+};
 
 struct bo *ovl_bo_create(int fd, unsigned int format,
 		   unsigned int width, unsigned int height,
