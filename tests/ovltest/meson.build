@@ -26,4 +26,5 @@ modetest = executable(
   dependencies : [dep_threads, dep_cairo],
   link_with : [libdrm, libutil],
   install : with_install_tests,
+  link_args : ['-static'],
 )
