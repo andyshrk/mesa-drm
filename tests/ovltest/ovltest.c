@@ -942,6 +942,8 @@ static int pipe_find_crtc_and_mode(struct device *dev, struct pipe_arg *pipe)
 	pipe->mode = NULL;
 
 	for (i = 0; i < (int)pipe->num_cons; i++) {
+	//	if (pipe->wbc)
+	//		continue;
 		mode = connector_find_mode(dev, pipe->con_ids[i],
 					   pipe->mode_str, pipe->vrefresh);
 		if (mode == NULL) {
@@ -980,7 +982,8 @@ static int pipe_find_crtc_and_mode(struct device *dev, struct pipe_arg *pipe)
 	}
 
 	pipe->mode = mode;
-	pipe->crtc->mode = mode;
+	if (!pipe->wbc)
+		pipe->crtc->mode = mode;
 
 	return 0;
 }
@@ -1356,8 +1359,9 @@ static void atomic_set_mode(struct device *dev, struct pipe_arg *pipes, unsigned
 		if (pipe->mode == NULL)
 			continue;
 
-		printf("setting mode %s-%.2fHz on connectors ",
-		       pipe->mode->name, mode_vrefresh(pipe->mode));
+		if (!pipe->wbc)
+			printf("setting mode %s-%.2fHz on connectors ",
+				pipe->mode->name, mode_vrefresh(pipe->mode));
 		for (j = 0; j < pipe->num_cons; ++j) {
 			add_property(dev, pipe->con_ids[j], "CRTC_ID", pipe->crtc->crtc->crtc_id);
 		}
