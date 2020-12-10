@@ -114,8 +114,29 @@ static void bo_unmap(struct bo *bo)
 	bo->ptr = NULL;
 }
 
+#define AFBC_HEADER_SIZE                16
+#define AFBC_HDR_ALIGN                  64
+#define AFBC_SUPERBLK_PIXELS            256
+#define AFBC_SUPERBLK_ALIGNMENT         128
+
+static int get_afbc_size(uint32_t width, uint32_t height, uint32_t bpp)
+{
+	uint32_t h_alignment = 16;
+	uint32_t n_blocks;
+	uint32_t hdr_size;
+	uint32_t size;
+
+	height = ALIGN(height, h_alignment);
+	n_blocks = width * height / AFBC_SUPERBLK_PIXELS;
+	hdr_size = ALIGN(n_blocks * AFBC_HEADER_SIZE, AFBC_HDR_ALIGN);
+
+	size = hdr_size + n_blocks * ALIGN(bpp * AFBC_SUPERBLK_PIXELS / 8, AFBC_SUPERBLK_ALIGNMENT);
+
+	return size;
+}
+
 struct bo *
-ovl_bo_create(int fd, unsigned int format,
+ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 	  unsigned int width, unsigned int height,
 	  unsigned int handles[4], unsigned int pitches[4],
 	  unsigned int offsets[4], const char *pic_name)
@@ -126,7 +147,7 @@ ovl_bo_create(int fd, unsigned int format,
 	void *virtual;
 	int ret;
 	int pic_fd;
-	unsigned int size;
+	unsigned int afbc_size;
 
 	switch (format) {
 	case DRM_FORMAT_C8:
@@ -222,6 +243,15 @@ ovl_bo_create(int fd, unsigned int format,
 		break;
 	}
 
+	/*
+	 * A afbc buffer combined with header and payload, so it
+	 * may larger than the uncomressed data.
+	 */
+	if (is_afbc) {
+		afbc_size = get_afbc_size(width, virtual_height, bpp);
+		while (afbc_size > (width * virtual_height * bpp >> 3))
+			virtual_height++;
+	}
 	bo = bo_create_dumb(fd, width, virtual_height, bpp);
 	if (!bo)
 		return NULL;
