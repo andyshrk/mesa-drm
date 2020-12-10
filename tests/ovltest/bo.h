@@ -25,9 +25,11 @@
  */
 
 #ifndef __BUFFERS_H__
-#define __BUFFERS_H__
+#define __BUFFERS_H_
 
+#include <stdbool.h>
 #include "util/pattern.h"
+#include "util_math.h"
 
 struct bo
 {
@@ -39,7 +41,7 @@ struct bo
 	unsigned handle;
 };
 
-struct bo *ovl_bo_create(int fd, unsigned int format,
+struct bo *ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 		   unsigned int width, unsigned int height,
 		   unsigned int handles[4], unsigned int pitches[4],
 		   unsigned int offsets[4], const char *pic_name);
