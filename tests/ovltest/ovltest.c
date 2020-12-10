@@ -1133,7 +1133,7 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p, const char 
 	p->old_bo = p->bo;
 
 	if (!plane_bo) {
-		plane_bo = ovl_bo_create(dev->fd, p->fourcc, p->w, p->h,
+		plane_bo = ovl_bo_create(dev->fd, p->fourcc, p->afbc_en, p->w, p->h,
 				     handles, pitches, offsets, file_name);
 
 		if (plane_bo == NULL)
@@ -1265,7 +1265,7 @@ static int atomic_add_wbc_fb(struct device *dev, struct pipe_arg *pipe)
 	h =  pipe->mode->vdisplay;
 	if (!pipe_bo) {
 
-		pipe_bo = ovl_bo_create(dev->fd, pipe->fourcc, w, h,
+		pipe_bo = ovl_bo_create(dev->fd, pipe->fourcc, false, w, h,
 					handles, pitches, offsets, NULL);
 
 		if (pipe_bo == NULL)
@@ -1490,6 +1490,7 @@ static int parse_plane(struct plane_arg *plane, const char *p)
 
 	p = end + 1;
 	plane->crtc_id = strtoul(p, &end, 10);
+
 	if (*end != ':')
 		return -EINVAL;
 
