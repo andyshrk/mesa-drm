@@ -1026,13 +1026,12 @@ static void fill_solid_rgb24(const struct util_rgb_info *rgb, void *mem,
 			     unsigned int width, unsigned int height,
 			     unsigned int stride, unsigned int value)
 {
-	uint8_t r = (value & 0xff0000) >> 16;
-	uint8_t g = (value & 0xff00) >> 8;
-	uint8_t b = value & 0xff;
-	struct color_rgb24 colors = MAKE_RGB24(rgb, r, g, b);
-
+	struct color_rgb24 colors;
+	char *base = mem;
 	unsigned int x;
 	unsigned int y;
+
+	colors.value = value;
 	for (y = 0; y < height; ++y) {
 		for (x = 0; x < width; ++x)
 			((struct color_rgb24 *)mem)[x] = colors;
