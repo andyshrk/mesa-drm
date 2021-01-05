@@ -308,6 +308,8 @@ static const char *modifier_to_string(uint64_t modifier)
 		return "MOD_BROADCOM_VC4_T_TILED";
 	case DRM_FORMAT_MOD_QCOM_COMPRESSED:
 		return "QCOM_COMPRESSED";
+	case DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 | AFBC_FORMAT_MOD_SPARSE):
+		return "AFBC_16x16_SPARSE";
 	default:
 		return "(UNKNOWN MODIFIER)";
 	}
