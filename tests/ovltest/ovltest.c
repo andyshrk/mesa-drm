@@ -840,6 +840,7 @@ struct plane_arg {
 	int32_t x, y;
 	uint32_t w, h;
 	uint32_t crtc_w, crtc_h;
+	uint32_t stride;
 	uint32_t zpos;
 	double scale;
 	unsigned int fb_id;
@@ -1136,7 +1137,7 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p, const char 
 	p->old_bo = p->bo;
 
 	if (!plane_bo) {
-		plane_bo = ovl_bo_create(dev->fd, p->fourcc, p->afbc_en, p->w, p->h,
+		plane_bo = ovl_bo_create(dev->fd, p->fourcc, p->afbc_en, p->stride, p->h,
 				     handles, pitches, offsets, file_name);
 
 		if (plane_bo == NULL)
@@ -1520,6 +1521,12 @@ static int parse_plane(struct plane_arg *plane, const char *p)
 		plane->crtc_h = plane->h;
 	}
 
+	if (!strncmp(end, "@stride:", 8)) {
+		p = end + 8;
+		plane->stride = strtoul(p, &end, 10);
+		fprintf(stderr, "stride: %d\n", plane->stride);
+	}
+
 	if (*end == '+' || *end == '-') {
 		plane->x = strtol(end, &end, 10);
 		if (*end != '+' && *end != '-')
@@ -1607,8 +1614,9 @@ static void usage(char *name)
 	fprintf(stderr, "\t-f\tlist framebuffers\n");
 	fprintf(stderr, "\t-p\tlist CRTCs and planes (pipes)\n");
 
+
 	fprintf(stderr, "\n Test options:\n\n");
-	fprintf(stderr, "\t-P <plane_id>@<crtc_id>:<w>x<h>[:<crtc_w>x<crtc_h>][+<x>+<y>][*<scale>][@<format>][@afbc][@rotatex/y/90/270]\tset a plane\n");
+	fprintf(stderr, "\t-P <plane_id>@<crtc_id>:<w>x<h>[:<crtc_w>x<crtc_h>][@stride:vir_w][+<x>+<y>][*<scale>][@<format>][@afbc][@rotatex/y/90/270]\tset a plane\n");
 	fprintf(stderr, "\t-s <connector_id>[,<connector_id>][@<crtc_id>]:[#<mode index>]<mode>[-<vrefresh>][@<format>]\tset a mode\n");
 	fprintf(stderr, "\t-C\ttest hw cursor\n");
 	fprintf(stderr, "\t-v\ttest vsynced page flipping\n");
