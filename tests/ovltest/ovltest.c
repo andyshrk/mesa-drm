@@ -1510,6 +1510,9 @@ static int parse_plane(struct plane_arg *plane, const char *p)
 		fprintf(stderr, "stride: %d\n", plane->stride);
 	}
 
+	if (!plane->stride)
+		plane->stride = plane->w;
+
 	if (*end == '+' || *end == '-') {
 		plane->x = strtol(end, &end, 10);
 		if (*end != '+' && *end != '-')
