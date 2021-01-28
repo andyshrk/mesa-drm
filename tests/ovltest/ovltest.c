@@ -1285,6 +1285,7 @@ static int get_bpp(int fourcc)
 		bpp = 16;
 		break;
 	case DRM_FORMAT_RGB888:
+	case DRM_FORMAT_BGR888:
 		bpp = 24;
 		break;
 	case DRM_FORMAT_ARGB8888:
