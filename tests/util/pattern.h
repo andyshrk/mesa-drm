@@ -38,6 +38,8 @@ enum util_fill_pattern {
 	UTIL_PATTERN_BLACK_WHITE,
 	UTIL_PATTERN_SOLID,
 	UTIL_PATTERN_BW,
+	UTIL_PATTERN_HCB,
+	UTIL_PATTERN_VCB,
 };
 
 void util_fill_pattern(uint32_t format, enum util_fill_pattern pattern,
