@@ -1346,6 +1346,97 @@ static void fill_gradient(const struct util_format_info *info, void *planes[3],
 	}
 }
 
+static void fill_h_colorbar_rgb32(const struct util_rgb_info *rgb, void *mem,
+			     unsigned int width, unsigned int height,
+			     unsigned int stride)
+{
+	unsigned int bar_h = 256;
+	unsigned int color[8] = {0x00, 0xff0000, 0x00ff00, 0xffff00, 0x0000ff, 0xff00ff, 0x00ffff, 0xffffff};
+	unsigned int index;
+	unsigned int val;
+	unsigned int x;
+	unsigned int y;
+
+	for (y = 0; y < height; ++y) {
+		index = (y / bar_h) % 8;
+		val = color[index];
+		for (x = 0; x < width; ++x)
+			((uint32_t *)mem)[x] = val;
+		mem += stride;
+	}
+}
+
+
+static void fill_h_colorbar(const struct util_format_info *info, void *planes[3],
+			    unsigned int width, unsigned int height,
+			    unsigned int stride)
+{
+	switch (info->format) {
+	case DRM_FORMAT_RGB565:
+	case DRM_FORMAT_BGR565:
+		printf("unsupport rgb565 horizon color bar\n");
+		return;
+	case DRM_FORMAT_BGR888:
+	case DRM_FORMAT_RGB888:
+		printf("unsupport rgb888 horizon color bar\n");
+		return;
+	case DRM_FORMAT_ARGB8888:
+	case DRM_FORMAT_XRGB8888:
+	case DRM_FORMAT_ABGR8888:
+	case DRM_FORMAT_XBGR8888:
+	case DRM_FORMAT_RGBA8888:
+	case DRM_FORMAT_RGBX8888:
+	case DRM_FORMAT_BGRA8888:
+	case DRM_FORMAT_BGRX8888:
+	case DRM_FORMAT_ARGB2101010:
+	case DRM_FORMAT_XRGB2101010:
+	case DRM_FORMAT_ABGR2101010:
+	case DRM_FORMAT_XBGR2101010:
+	case DRM_FORMAT_RGBA1010102:
+	case DRM_FORMAT_RGBX1010102:
+	case DRM_FORMAT_BGRA1010102:
+	case DRM_FORMAT_BGRX1010102:
+		return fill_h_colorbar_rgb32(&info->rgb, planes[0],
+					width, height, stride);
+
+
+	}
+}
+
+static void fill_v_colorbar(const struct util_format_info *info, void *planes[3],
+			    unsigned int width, unsigned int height,
+			    unsigned int stride)
+{
+	switch (info->format) {
+	case DRM_FORMAT_RGB565:
+	case DRM_FORMAT_BGR565:
+		printf("unsupport rgb565 vertical color bar\n");
+		return;
+	case DRM_FORMAT_BGR888:
+	case DRM_FORMAT_RGB888:
+		printf("unsupport rgb888 vertical color bar\n");
+		return;
+	case DRM_FORMAT_ARGB8888:
+	case DRM_FORMAT_XRGB8888:
+	case DRM_FORMAT_ABGR8888:
+	case DRM_FORMAT_XBGR8888:
+	case DRM_FORMAT_RGBA8888:
+	case DRM_FORMAT_RGBX8888:
+	case DRM_FORMAT_BGRA8888:
+	case DRM_FORMAT_BGRX8888:
+	case DRM_FORMAT_ARGB2101010:
+	case DRM_FORMAT_XRGB2101010:
+	case DRM_FORMAT_ABGR2101010:
+	case DRM_FORMAT_XBGR2101010:
+	case DRM_FORMAT_RGBA1010102:
+	case DRM_FORMAT_RGBX1010102:
+	case DRM_FORMAT_BGRA1010102:
+	case DRM_FORMAT_BGRX1010102:
+		printf("unsupport xrgb888 vertical color bar\n");
+		return;
+	}
+}
+
 /*
  * util_fill_pattern - Fill a buffer with a test pattern
  * @format: Pixel format
@@ -1380,6 +1471,10 @@ void util_fill_pattern(uint32_t format, enum util_fill_pattern pattern,
 
 	case UTIL_PATTERN_GRADIENT:
 		return fill_gradient(info, planes, width, height, stride);
+	case UTIL_PATTERN_HCB:
+		return fill_h_colorbar(info, planes, width, height, stride);
+	case UTIL_PATTERN_VCB:
+		return fill_v_colorbar(info, planes, width, height, stride);
 	case UTIL_PATTERN_SOLID:
 		return fill_solid(info, planes, width, height, stride, value);
 	default:
@@ -1393,6 +1488,8 @@ static const char *pattern_names[] = {
 	[UTIL_PATTERN_SMPTE] = "smpte",
 	[UTIL_PATTERN_PLAIN] = "plain",
 	[UTIL_PATTERN_GRADIENT] = "gradient",
+	[UTIL_PATTERN_HCB] = "hcolorbar",
+	[UTIL_PATTERN_VCB] = "vcolorbar",
 	[UTIL_PATTERN_SOLID] = "solid",
 };
 
