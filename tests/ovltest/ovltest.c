@@ -923,14 +923,35 @@ static struct crtc *pipe_find_crtc(struct device *dev, struct pipe_arg *pipe)
 
 static int pipe_find_crtc_and_mode(struct device *dev, struct pipe_arg *pipe)
 {
+	drmModeConnector *connector;
 	drmModeModeInfo *mode = NULL;
+	uint32_t hdisplay, vdisplay;
 	int i;
 
 	pipe->mode = NULL;
 
 	for (i = 0; i < (int)pipe->num_cons; i++) {
-	//	if (pipe->wbc)
-	//		continue;
+
+		connector = get_connector_by_id(dev, pipe->con_ids[i]);
+		if (!connector)
+			continue;
+	        if (connector->connector_type == DRM_MODE_CONNECTOR_WRITEBACK) {
+			pipe->wbc = true;
+			mode = calloc(1, sizeof(*mode));
+			if (!mode) {
+				fprintf(stderr, "out of memory for writeback connector mode\n");
+				return -ENOMEM;
+			}
+
+			if (sscanf(pipe->mode_str, "%u x %u", &hdisplay, &vdisplay) != 2 ) {
+				fprintf(stderr, "scan width and height for writeback failed\n");
+				return -EINVAL;
+			}
+			mode->hdisplay = hdisplay;
+			mode->vdisplay = vdisplay;
+			continue;
+		}
+
 		mode = connector_find_mode(dev, pipe->con_ids[i],
 					   pipe->mode_str, pipe->vrefresh);
 		if (mode == NULL) {
@@ -1251,7 +1272,6 @@ static int atomic_add_wbc_fb(struct device *dev, struct pipe_arg *pipe)
 	w = pipe->mode->hdisplay;
 	h =  pipe->mode->vdisplay;
 	if (!pipe_bo) {
-
 		pipe_bo = ovl_bo_create(dev->fd, pipe->fourcc, false, w, h,
 					handles, pitches, offsets, NULL);
 
@@ -1269,7 +1289,6 @@ static int atomic_add_wbc_fb(struct device *dev, struct pipe_arg *pipe)
 	}
 
 	return 0;
-
 }
 
 static int get_bpp(int fourcc)
@@ -1344,22 +1363,26 @@ static void atomic_set_mode(struct device *dev, struct pipe_arg *pipes, unsigned
 		struct pipe_arg *pipe = &pipes[i];
 		uint32_t blob_id;
 
-		if (pipe->mode == NULL)
+		if (!pipe->mode)
 			continue;
 
 		if (!pipe->wbc)
 			printf("setting mode %s-%.2fHz on connectors ",
 				pipe->mode->name, mode_vrefresh(pipe->mode));
 		for (j = 0; j < pipe->num_cons; ++j) {
+			if (pipe->wbc)
+				printf("writeback connector %s, ", pipe->cons[j]);
+			else
+				printf("%s, ", pipe->cons[j]);
 			add_property(dev, pipe->con_ids[j], "CRTC_ID", pipe->crtc->crtc->crtc_id);
 		}
 		printf("crtc %d\n", pipe->crtc->crtc->crtc_id);
 		if (pipe->wbc) {
 			atomic_add_wbc_fb(dev, pipe);
-			printf("write back connector fb_id :%d\n", pipe->fb_id);
+			printf("write back %d x %d to fb_id :%d\n",
+			       pipe->mode->hdisplay, pipe->mode->vdisplay, pipe->fb_id);
 			add_property(dev, pipe->con_ids[0], "WRITEBACK_FB_ID", pipe->fb_id);
 		} else {
-
 			drmModeCreatePropertyBlob(dev->fd, pipe->mode, sizeof(*pipe->mode), &blob_id);
 			add_property(dev, pipe->crtc->crtc->crtc_id, "MODE_ID", blob_id);
 			add_property(dev, pipe->crtc->crtc->crtc_id, "ACTIVE", 1);
@@ -1454,9 +1477,6 @@ static int parse_connector(struct pipe_arg *pipe, const char *arg)
 	if (*p == '@') {
 		strncpy(pipe->format_str, p + 1, 4);
 		pipe->format_str[4] = '\0';
-		if (strstr(p + 5, "@WBC"))
-			pipe->wbc = true;
-
 	}
 
 	pipe->fourcc = util_format_fourcc(pipe->format_str);
@@ -1814,7 +1834,7 @@ int main(int argc, char **argv)
 
 	dev.req = drmModeAtomicAlloc();
 
-	if (count && plane_count) {
+	if (count) {
 		uint64_t cap = 0;
 
 		ret = drmGetCap(dev.fd, DRM_CAP_DUMB_BUFFER, &cap);
