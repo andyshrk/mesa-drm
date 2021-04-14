@@ -1653,6 +1653,8 @@ static void usage(char *name)
 	fprintf(stderr, "\t-d\tdrop master after mode set\n");
 	fprintf(stderr, "\t-M module\tuse the given driver\n");
 	fprintf(stderr, "\t-D device\tuse the given device\n");
+	fprintf(stderr, "\t-t \t oneshot test, show one frame then exit\n");
+
 
 	fprintf(stderr, "\n\tDefault is to dump all info.\n");
 	exit(0);
@@ -1684,7 +1686,7 @@ static int pipe_resolve_connectors(struct device *dev, struct pipe_arg *pipe)
 	return 0;
 }
 
-static char optstr[] = "acdD:efF:M:P:ps:Cvw:o";
+static char optstr[] = "acdD:efF:M:P:ps:Cvw:ot";
 
 int main(int argc, char **argv)
 {
@@ -1709,6 +1711,7 @@ int main(int argc, char **argv)
 	unsigned int c_plane_count = 0;
 	unsigned int c_count = 0;
 	bool c_increase_mode;
+	bool one_shot = false;
 	int ret;
 
 	memset(&dev, 0, sizeof dev);
@@ -1779,6 +1782,9 @@ int main(int argc, char **argv)
 				usage(argv[0]);
 
 			count++;
+			break;
+		case 't':
+			one_shot = true;
 			break;
 		case 'v':
 			test_vsync = 1;
@@ -1933,7 +1939,10 @@ int main(int argc, char **argv)
 		if (drop_master)
 			drmDropMaster(dev.fd);
 
-		getchar();
+		if (!one_shot)
+			getchar();
+		else
+			sleep(3);
 
 		drmModeAtomicFree(dev.req);
 		dev.req = drmModeAtomicAlloc();
