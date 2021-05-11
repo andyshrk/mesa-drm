@@ -40,6 +40,7 @@
 
 #include <assert.h>
 #include <ctype.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,6 +50,7 @@
 #include <string.h>
 #include <strings.h>
 #include <errno.h>
+#include <pthread.h>
 #include <poll.h>
 #include <sys/time.h>
 #if HAVE_SYS_SELECT_H
@@ -132,6 +134,8 @@ struct device {
 	int use_atomic;
 	drmModeAtomicReq *req;
 	int32_t writeback_fence_fd;
+	int vcnt_fd;
+	pthread_t vcnt_thread;
 };
 
 static inline int64_t U642I64(uint64_t val)
@@ -1709,6 +1713,8 @@ static unsigned int set_mode(struct device *dev, struct pipe_arg **pipe_args, un
 			drmModeCreatePropertyBlob(dev->fd, pipe->mode, sizeof(*pipe->mode), &blob_id);
 			add_property(dev, pipe->crtc_id, "MODE_ID", blob_id);
 			add_property(dev, pipe->crtc_id, "ACTIVE", 1);
+			if (dev->vcnt_fd)
+				add_property(dev, pipe->crtc->crtc->crtc_id, "LINE_FLAG1", pipe->mode->vtotal >> 1);
 
 			/* By default atomic modeset does not set a primary plane, shrug */
 			if (preferred) {
@@ -1888,6 +1894,67 @@ static void clear_cursors(struct device *dev)
 
 	if (dev->mode.cursor_bo)
 		bo_destroy(dev->mode.cursor_bo);
+}
+
+#define DRM_EVENT_ROCKCHIP_CRTC_VCNT    0xf
+
+static int drm_event_handler(int fd, drmEventContextPtr evctx)
+{
+	char buffer[1024];
+	int len, i;
+	struct drm_event *e;
+	struct drm_event_vblank *vblank;
+
+	int err = lseek(fd, 0, SEEK_SET);
+	if (err < 0) {
+		fprintf(stderr, "failed to seeking to vcnt: %s", strerror(errno));
+		return -1;
+	}
+
+	len = read(fd, buffer, sizeof buffer);
+	if (len < (int)sizeof *e) {
+		//fprintf(stderr, "read failed len: %d : %s\n", len, strerror(errno));
+		return -1;
+	}
+
+	i = 0;
+	while (i < len) {
+		e = (struct drm_event *)(buffer + i);
+		switch (e->type) {
+		case DRM_EVENT_ROCKCHIP_CRTC_VCNT:
+			vblank = (struct drm_event_vblank *) e;
+			fprintf(stderr, "vcnt crtc %d count: %d  time: %d:%06d\n",
+				vblank->crtc_id, vblank->sequence, vblank->tv_sec, vblank->tv_usec);
+
+		default:
+			break;
+		}
+		i += e->length;
+	}
+
+	return 0;
+}
+
+static void *vcnt_thread(void *data) {
+	struct device *dev = (struct device*)data;
+	struct pollfd fds[1];
+	int ret;
+
+	fds[0].fd = dev->vcnt_fd;
+	fds[0].events = POLLPRI;
+	while (1) {
+		ret = poll(fds, 1, -1);
+		if (ret > 0) {
+			if (fds[0].revents & POLLPRI) {
+				drm_event_handler(dev->vcnt_fd, NULL);
+			}
+
+		} else {
+			fprintf(stderr, "error poll vcnt(ret=%d) : %s", ret, strerror(errno));
+		}
+	}
+
+	return NULL;
 }
 
 static void test_page_flip(struct device *dev, struct pipe_arg *pipes, unsigned int count)
@@ -2209,7 +2276,7 @@ static void usage(char *name)
 	exit(0);
 }
 
-static char optstr[] = "acdD:efF:M:P:ps:Cvrw:o:";
+static char optstr[] = "acdD:efF:M:P:ps:Cvrw:o:l";
 
 int main(int argc, char **argv)
 {
@@ -2222,6 +2289,7 @@ int main(int argc, char **argv)
 	int test_cursor = 0;
 	int set_preferred = 0;
 	int use_atomic = 0;
+	int test_vcnt = 0;
 	char *device = NULL;
 	char *module = NULL;
 	unsigned int i;
@@ -2329,6 +2397,9 @@ int main(int argc, char **argv)
 
 			prop_count++;
 			break;
+		case 'l':
+			test_vcnt = 1;
+			break;
 		default:
 			usage(argv[0]);
 			break;
@@ -2383,6 +2454,18 @@ int main(int argc, char **argv)
 
 	for (i = 0; i < prop_count; ++i)
 		set_property(&dev, &prop_args[i]);
+
+	if (test_vcnt) {
+		dev.vcnt_fd = open("/sys/devices/platform/display-subsystem/vcnt_event", O_RDONLY);
+		if (dev.vcnt_fd < 0) {
+			fprintf(stderr, "failed to vcnt_event: %s\n", strerror(errno));
+			dev.vcnt_fd = 0;
+		} else {
+			ret = pthread_create(&dev.vcnt_thread, NULL, vcnt_thread, (void *)&dev);
+			if (ret < 0)
+				fprintf(stderr,"%s couldn't create vsync thread\n", __func__);
+		}
+	}
 
 	if (dev.use_atomic) {
 		if (set_preferred || (count && plane_count)) {
