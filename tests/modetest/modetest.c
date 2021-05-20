@@ -1822,6 +1822,9 @@ static void atomic_clear_mode(struct device *dev, struct pipe_arg *pipes, unsign
 
 		add_property(dev, pipe->crtc_id, "MODE_ID", 0);
 		add_property(dev, pipe->crtc_id, "ACTIVE", 0);
+		if (dev->vcnt_fd)
+			add_property(dev, pipe->crtc->crtc->crtc_id, "LINE_FLAG1", 0);
+
 	}
 }
 
@@ -1900,12 +1903,14 @@ static void clear_cursors(struct device *dev)
 
 static int drm_event_handler(int fd, drmEventContextPtr evctx)
 {
-	char buffer[1024];
-	int len, i;
 	struct drm_event *e;
 	struct drm_event_vblank *vblank;
+	struct timespec time = { 0 };
+	char buffer[1024];
+	int len, i, err;
 
-	int err = lseek(fd, 0, SEEK_SET);
+	clock_gettime(CLOCK_MONOTONIC, &time);
+	err = lseek(fd, 0, SEEK_SET);
 	if (err < 0) {
 		fprintf(stderr, "failed to seeking to vcnt: %s", strerror(errno));
 		return -1;
@@ -1913,18 +1918,20 @@ static int drm_event_handler(int fd, drmEventContextPtr evctx)
 
 	len = read(fd, buffer, sizeof buffer);
 	if (len < (int)sizeof *e) {
-		//fprintf(stderr, "read failed len: %d : %s\n", len, strerror(errno));
+		//fprintf(stderr, "read failed len: %d polled_time:%lu:%06lu %s\n", len, time.tv_sec, time.tv_nsec / 1000, strerror(errno));
 		return -1;
 	}
 
 	i = 0;
+
 	while (i < len) {
 		e = (struct drm_event *)(buffer + i);
 		switch (e->type) {
 		case DRM_EVENT_ROCKCHIP_CRTC_VCNT:
 			vblank = (struct drm_event_vblank *) e;
-			fprintf(stderr, "vcnt crtc %d count: %d  time: %d:%06d\n",
-				vblank->crtc_id, vblank->sequence, vblank->tv_sec, vblank->tv_usec);
+			fprintf(stderr, "vcnt crtc %d count: %d  event_time: %d:%06d polled_time: %lu:%06lu diff: %06lu\n",
+				vblank->crtc_id, vblank->sequence, vblank->tv_sec, vblank->tv_usec, time.tv_sec, time.tv_nsec/1000,
+				time.tv_nsec/1000 - vblank->tv_usec);
 
 		default:
 			break;
@@ -1942,6 +1949,7 @@ static void *vcnt_thread(void *data) {
 
 	fds[0].fd = dev->vcnt_fd;
 	fds[0].events = POLLPRI;
+	fprintf(stderr, "vcnt event poll thread start\n");
 	while (1) {
 		ret = poll(fds, 1, -1);
 		if (ret > 0) {
@@ -2456,6 +2464,11 @@ int main(int argc, char **argv)
 		set_property(&dev, &prop_args[i]);
 
 	if (test_vcnt) {
+		if (!dev.use_atomic) {
+			fprintf(stderr, "vcnt event must run in atomic mode\n");
+			drmClose(dev.fd);
+			return -1;
+		}
 		dev.vcnt_fd = open("/sys/devices/platform/display-subsystem/vcnt_event", O_RDONLY);
 		if (dev.vcnt_fd < 0) {
 			fprintf(stderr, "failed to vcnt_event: %s\n", strerror(errno));
