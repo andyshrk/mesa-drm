@@ -1545,7 +1545,6 @@ static int parse_plane(struct plane_arg *plane, const char *p)
 	if (!strncmp(end, "@stride:", 8)) {
 		p = end + 8;
 		plane->stride = strtoul(p, &end, 10);
-		fprintf(stderr, "stride: %d\n", plane->stride);
 	}
 
 	if (!plane->stride)
@@ -1629,7 +1628,7 @@ static void parse_pictures(char *arg)
 
 static void usage(char *name)
 {
-	fprintf(stderr, "overlay test, libdrm version: 2.4.101\n");
+	fprintf(stderr, "overlay test by Andy, libdrm version: 2.4.101\n");
 	fprintf(stderr, "usage: %s [-acDdefMPpsCvw]\n", name);
 
 	fprintf(stderr, "\n Query options:\n\n");
@@ -1712,6 +1711,7 @@ int main(int argc, char **argv)
 	unsigned int c_count = 0;
 	bool c_increase_mode;
 	bool one_shot = false;
+	drmVersionPtr version;
 	int ret;
 
 	memset(&dev, 0, sizeof dev);
@@ -1815,6 +1815,17 @@ int main(int argc, char **argv)
 	dev.fd = util_open(device, module);
 	if (dev.fd < 0)
 		return -1;
+
+	version = drmGetVersion(dev.fd);
+	if(version) {
+		printf("Description: %s\n", version->desc);
+		printf("Name: %s\n", version->name);
+		printf("Version: %d.%d.%d\n", version->version_major,
+		       version->version_minor, version->version_patchlevel);
+		printf("Date: %s\n", version->date);
+		drmFreeVersion(version);
+
+	}
 
 	ret = drmSetClientCap(dev.fd, DRM_CLIENT_CAP_ATOMIC, 1);
 	if (ret && use_atomic) {
