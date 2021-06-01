@@ -830,6 +830,7 @@ struct plane_arg {
 	int32_t x, y;
 	uint32_t w, h;
 	uint32_t crtc_w, crtc_h;
+	uint32_t color_key;
 	double scale;
 	unsigned int fb_id;
 	unsigned int old_fb_id;
@@ -1243,6 +1244,8 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p,
 	add_property(dev, p->plane_id, "CRTC_W", crtc_w);
 	add_property(dev, p->plane_id, "CRTC_H", crtc_h);
 	add_property(dev, p->plane_id, "rotation", p->rotation);
+	if (p->color_key)
+		add_property(dev, p->plane_id, "colorkey", p->color_key);
 	return 0;
 }
 
@@ -1271,6 +1274,11 @@ static int set_plane(struct device *dev, struct plane_arg *p)
 
 	if (!crtc) {
 		fprintf(stderr, "CRTC %u not found\n", p->crtc_id);
+		return -1;
+	}
+
+	if (p->color_key) {
+		fprintf(stderr, "color key must run in atomic mode\n");
 		return -1;
 	}
 
@@ -1920,6 +1928,14 @@ static int parse_plane(struct plane_arg *plane, const char *p)
 	else
 		plane->rotation |= DRM_MODE_ROTATE_0;
 
+	/* color key */
+	if (strstr(end, "#")) {
+		p = end + 1;
+		plane->color_key = strtoul(p, &end, 16);
+		plane->color_key |= (1 << 31);
+		fprintf(stderr, "color key 0x%x\n", plane->color_key);
+	}
+
 	plane->fourcc = util_format_fourcc(plane->format_str);
 	if (plane->fourcc == 0) {
 		fprintf(stderr, "unknown format %s, use XR24 as default\n", plane->format_str);
@@ -1976,7 +1992,7 @@ static void usage(char *name)
 	fprintf(stderr, "\t-p\tlist CRTCs and planes (pipes)\n");
 
 	fprintf(stderr, "\n Test options:\n\n");
-	fprintf(stderr, "\t-P <plane_id>@<crtc_id>:<w>x<h>:<crtc_w>x<crtc_h>[+<x>+<y>][*<scale>][@<format>][@rotatex/y/90/270]\tset a plane\n");
+	fprintf(stderr, "\t-P <plane_id>@<crtc_id>:<w>x<h>:<crtc_w>x<crtc_h>[+<x>+<y>][*<scale>][@<format>][@rotatex/y/90/270][#colorkey]\tset a plane\n");
 	fprintf(stderr, "\t-s <connector_id>[,<connector_id>][@<crtc_id>]:[#<mode index>]<mode>[-<vrefresh>][@<format>]\tset a mode\n");
 	fprintf(stderr, "\t-C\ttest hw cursor\n");
 	fprintf(stderr, "\t-v\ttest vsynced page flipping\n");
@@ -2061,6 +2077,7 @@ int main(int argc, char **argv)
 	int test_vcnt = 0;
 	char *device = NULL;
 	char *module = NULL;
+	unsigned int colorkey=0;
 	unsigned int i;
 	unsigned int count = 0, plane_count = 0;
 	unsigned int prop_count = 0;
@@ -2236,6 +2253,12 @@ int main(int argc, char **argv)
 			if (ret < 0)
 				fprintf(stderr,"%s couldn't create vsync thread\n", __func__);
 		}
+	}
+
+	if (colorkey && !dev.use_atomic) {
+		fprintf(stderr, "colorkey must run in atomic mode\n");
+		drmClose(dev.fd);
+		return -1;
 	}
 
 	if (dev.use_atomic) {
