@@ -1906,10 +1906,10 @@ static int drm_event_handler(int fd, drmEventContextPtr evctx)
 	struct drm_event *e;
 	struct drm_event_vblank *vblank;
 	struct timespec time = { 0 };
+	unsigned long diff_usec;
 	char buffer[1024];
 	int len, i, err;
 
-	clock_gettime(CLOCK_MONOTONIC, &time);
 	err = lseek(fd, 0, SEEK_SET);
 	if (err < 0) {
 		fprintf(stderr, "failed to seeking to vcnt: %s", strerror(errno));
@@ -1921,6 +1921,7 @@ static int drm_event_handler(int fd, drmEventContextPtr evctx)
 		//fprintf(stderr, "read failed len: %d polled_time:%lu:%06lu %s\n", len, time.tv_sec, time.tv_nsec / 1000, strerror(errno));
 		return -1;
 	}
+	clock_gettime(CLOCK_MONOTONIC, &time);
 
 	i = 0;
 
@@ -1929,9 +1930,11 @@ static int drm_event_handler(int fd, drmEventContextPtr evctx)
 		switch (e->type) {
 		case DRM_EVENT_ROCKCHIP_CRTC_VCNT:
 			vblank = (struct drm_event_vblank *) e;
-			fprintf(stderr, "vcnt crtc %d count: %d  event_time: %d:%06d polled_time: %lu:%06lu diff: %06lu\n",
-				vblank->crtc_id, vblank->sequence, vblank->tv_sec, vblank->tv_usec, time.tv_sec, time.tv_nsec/1000,
-				time.tv_nsec/1000 - vblank->tv_usec);
+			diff_usec = (time.tv_sec * 1000000 +  time.tv_nsec/1000) - (vblank->tv_sec * 1000000 + vblank->tv_usec);
+			if (diff_usec >= 1000)
+				fprintf(stderr, "vcnt crtc %-4d count: %-8d event_time: %d:%06d polled_time: %lu:%06lu diff: %06lu\n",
+					vblank->crtc_id, vblank->sequence, vblank->tv_sec, vblank->tv_usec, time.tv_sec,
+					time.tv_nsec/1000, diff_usec);
 
 		default:
 			break;
