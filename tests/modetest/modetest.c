@@ -52,6 +52,7 @@
 #include <errno.h>
 #include <pthread.h>
 #include <poll.h>
+#include <sys/ioctl.h>
 #include <sys/time.h>
 #if HAVE_SYS_SELECT_H
 #include <sys/select.h>
@@ -135,7 +136,6 @@ struct device {
 	drmModeAtomicReq *req;
 	int32_t writeback_fence_fd;
 	int vcnt_fd;
-	pthread_t vcnt_thread;
 };
 
 static inline int64_t U642I64(uint64_t val)
@@ -850,6 +850,12 @@ struct plane_arg {
 	struct bo *old_bo;
 	char format_str[8]; /* need to leave room for "_BE" and terminating \0 */
 	unsigned int fourcc;
+};
+
+struct vcnt_event {
+	struct device *dev;
+	int count;
+	pthread_t vcnt_thread;
 };
 
 static drmModeModeInfo *
@@ -1899,7 +1905,45 @@ static void clear_cursors(struct device *dev)
 		bo_destroy(dev->mode.cursor_bo);
 }
 
+static int poll_vcnt_by_sysfs_notify;
+#define DRM_ROCKCHIP_GET_VCNT_EVENT     0x05
 #define DRM_EVENT_ROCKCHIP_CRTC_VCNT    0xf
+#define _DRM_ROCKCHIP_VCNT_EVENT 0x80000000
+
+#define DRM_IOCTL_ROCKCHIP_GET_VCNT_EVENT  DRM_IOWR(DRM_COMMAND_BASE + \
+		DRM_ROCKCHIP_GET_VCNT_EVENT, union drm_wait_vblank)
+
+static int drmGetVcnt(int fd, drmVBlankPtr vbl)
+{
+    struct timespec timeout, cur;
+    int ret;
+
+    ret = clock_gettime(CLOCK_MONOTONIC, &timeout);
+    if (ret < 0) {
+        fprintf(stderr, "clock_gettime failed: %s\n", strerror(errno));
+        goto out;
+    }
+    timeout.tv_sec++;
+
+    do {
+       ret = ioctl(fd, DRM_IOCTL_ROCKCHIP_GET_VCNT_EVENT, vbl);
+       vbl->request.type &= ~DRM_VBLANK_RELATIVE;
+       if (ret && errno == EINTR) {
+           clock_gettime(CLOCK_MONOTONIC, &cur);
+           /* Timeout after 1s */
+           if (cur.tv_sec > timeout.tv_sec + 1 ||
+               (cur.tv_sec == timeout.tv_sec && cur.tv_nsec >=
+                timeout.tv_nsec)) {
+                   errno = EBUSY;
+                   ret = -1;
+                   break;
+           }
+       }
+    } while (ret && errno == EINTR);
+
+out:
+    return ret;
+}
 
 static int drm_event_handler(int fd, drmEventContextPtr evctx)
 {
@@ -1909,11 +1953,14 @@ static int drm_event_handler(int fd, drmEventContextPtr evctx)
 	unsigned long diff_usec;
 	char buffer[1024];
 	int len, i, err;
+	drmVBlank vbl;
 
-	err = lseek(fd, 0, SEEK_SET);
-	if (err < 0) {
-		fprintf(stderr, "failed to seeking to vcnt: %s", strerror(errno));
-		return -1;
+	if (poll_vcnt_by_sysfs_notify) {
+		err = lseek(fd, 0, SEEK_SET);
+		if (err < 0) {
+			fprintf(stderr, "failed to seeking to vcnt: %s\n", strerror(errno));
+			return -1;
+		}
 	}
 
 	len = read(fd, buffer, sizeof buffer);
@@ -1935,6 +1982,19 @@ static int drm_event_handler(int fd, drmEventContextPtr evctx)
 				fprintf(stderr, "vcnt crtc %-4d count: %-8d event_time: %d:%06d polled_time: %lu:%06lu diff: %06lu\n",
 					vblank->crtc_id, vblank->sequence, vblank->tv_sec, vblank->tv_usec, time.tv_sec,
 					time.tv_nsec/1000, diff_usec);
+			/* Queue an event for frame + 1 */
+			if (!poll_vcnt_by_sysfs_notify) {
+				memset(&vbl, 0, sizeof(vbl));
+				/* we use user_data store crtc index */
+				vbl.request.type = (vblank->user_data << DRM_VBLANK_HIGH_CRTC_SHIFT) & DRM_VBLANK_HIGH_CRTC_MASK;
+				vbl.request.type |= _DRM_ROCKCHIP_VCNT_EVENT;
+				err = drmGetVcnt(fd, &vbl);
+				if (err != 0) {
+					printf("drmGetVcnt failed ret: %i\n", err);
+					return -1;
+				}
+			}
+
 
 		default:
 			break;
@@ -1946,26 +2006,86 @@ static int drm_event_handler(int fd, drmEventContextPtr evctx)
 }
 
 static void *vcnt_thread(void *data) {
-	struct device *dev = (struct device*)data;
-	struct pollfd fds[1];
-	int ret;
+	struct vcnt_event *evt = (struct vcnt_event *)data;
+	struct device *dev = evt->dev;
+	struct timeval timeout;
+	fd_set fds;
+	struct pollfd poll_fds[1];
+	drmVBlank vbl;
+	int ret, fd;
+	int i;
 
-	fds[0].fd = dev->vcnt_fd;
-	fds[0].events = POLLPRI;
+	fd = dev->vcnt_fd;
+
+	/* Queue an event for frame + 1 */
+	if (!poll_vcnt_by_sysfs_notify) {
+		for (i = 0; i < evt->count; i++) {
+			memset(&vbl, 0, sizeof(vbl));
+			vbl.request.type = (i << DRM_VBLANK_HIGH_CRTC_SHIFT) & DRM_VBLANK_HIGH_CRTC_MASK;
+			vbl.request.type |= _DRM_ROCKCHIP_VCNT_EVENT;
+			ret = drmGetVcnt(dev->vcnt_fd, &vbl);
+			if (ret != 0)
+				printf("drmGetVcnt failed ret: %i\n", ret);
+		}
+	}
+
 	fprintf(stderr, "vcnt event poll thread start\n");
 	while (1) {
-		ret = poll(fds, 1, -1);
-		if (ret > 0) {
-			if (fds[0].revents & POLLPRI) {
-				drm_event_handler(dev->vcnt_fd, NULL);
+		if (poll_vcnt_by_sysfs_notify) {
+			poll_fds[0].fd = dev->vcnt_fd;
+			poll_fds[0].events = POLLPRI;
+			ret = poll(poll_fds, 1, -1);
+
+			if (ret > 0) {
+				if (poll_fds[0].revents & POLLPRI) {
+					drm_event_handler(dev->vcnt_fd, NULL);
+				}
+			} else {
+				fprintf(stderr, "error poll vcnt(ret=%d) : %s", ret, strerror(errno));
 			}
 
 		} else {
-			fprintf(stderr, "error poll vcnt(ret=%d) : %s", ret, strerror(errno));
+			timeout.tv_sec = 3;
+			timeout.tv_usec = 0;
+
+			FD_ZERO(&fds);
+			FD_SET(0, &fds);
+			FD_SET(fd, &fds);
+			ret = select(fd + 1, &fds, NULL, NULL, &timeout);
+
+			if (ret <= 0) {
+				fprintf(stderr, "select timed out or error (ret %d)\n",
+					ret);
+				continue;
+			} else if (FD_ISSET(0, &fds)) {
+				break;
+			}
+
+			drm_event_handler(dev->vcnt_fd, NULL);
 		}
 	}
 
 	return NULL;
+}
+
+static void drm_create_vcnt_thread(struct device *dev, unsigned int count)
+{
+	struct vcnt_event *evt;
+	struct sched_param param;
+	int policy;
+	int ret;
+
+	evt = calloc(1, sizeof(*evt));
+	evt->dev = dev;
+	evt->count = count;
+
+	ret = pthread_create(&evt->vcnt_thread, NULL, vcnt_thread, (void *)evt);
+	if (ret < 0)
+		fprintf(stderr,"%s couldn't create vsync thread\n", __func__);
+	pthread_getschedparam(evt->vcnt_thread, &policy, &param);
+	param.sched_priority = sched_get_priority_max(SCHED_FIFO) ;
+	pthread_setschedparam(evt->vcnt_thread, SCHED_FIFO, &param);
+
 }
 
 static void test_page_flip(struct device *dev, struct pipe_arg *pipes, unsigned int count)
@@ -2472,14 +2592,16 @@ int main(int argc, char **argv)
 			drmClose(dev.fd);
 			return -1;
 		}
-		dev.vcnt_fd = open("/sys/devices/platform/display-subsystem/vcnt_event", O_RDONLY);
+		if (poll_vcnt_by_sysfs_notify)
+			dev.vcnt_fd = open("/sys/devices/platform/display-subsystem/vcnt_event", O_RDONLY);
+		else
+			dev.vcnt_fd = dev.fd;
+
 		if (dev.vcnt_fd < 0) {
 			fprintf(stderr, "failed to vcnt_event: %s\n", strerror(errno));
 			dev.vcnt_fd = 0;
 		} else {
-			ret = pthread_create(&dev.vcnt_thread, NULL, vcnt_thread, (void *)&dev);
-			if (ret < 0)
-				fprintf(stderr,"%s couldn't create vsync thread\n", __func__);
+			drm_create_vcnt_thread(&dev, count);
 		}
 	}
 
