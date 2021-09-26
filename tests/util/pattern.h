@@ -36,6 +36,7 @@ enum util_fill_pattern {
 	UTIL_PATTERN_HCB,
 	UTIL_PATTERN_VCB,
 	UTIL_PATTERN_SOLID,
+	UTIL_PATTERN_BW,
 };
 
 void util_fill_pattern(uint32_t format, enum util_fill_pattern pattern,
