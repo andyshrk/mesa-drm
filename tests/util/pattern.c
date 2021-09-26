@@ -1629,7 +1629,6 @@ static void fill_solid_rgb16(const struct util_rgb_info *info, void *mem,
 
 }
 
-
 static void fill_solid_rgb24(const struct util_rgb_info *rgb, void *mem,
 			     unsigned int width, unsigned int height,
 			     unsigned int stride, unsigned int value)
@@ -1644,7 +1643,6 @@ static void fill_solid_rgb24(const struct util_rgb_info *rgb, void *mem,
 	for (y = 0; y < height; ++y) {
 		for (x = 0; x < width; ++x)
 			((struct color_rgb24 *)mem)[x] = colors;
-
 		mem += stride;
 	}
 }
@@ -1734,8 +1732,138 @@ static void fill_solid(const struct util_format_info *info, void *planes[3],
 	case DRM_FORMAT_XBGR16161616F:
 	case DRM_FORMAT_ARGB16161616F:
 	case DRM_FORMAT_ABGR16161616F:
-		return fill_tiles_rgb16fp(info, planes[0],
-					  width, height, stride);
+	default:
+		printf("Error(fill_solid): unsupported test pattern\n");
+		break;
+	}
+}
+
+static void fill_bw_rgb16(const struct util_rgb_info *info, void *mem,
+			     unsigned int width, unsigned int height,
+			     unsigned int stride)
+{
+	unsigned int x, y;
+
+	for (y = 0; y < height; ++y) {
+		for (x = 0; x < width; ++x) {
+			if(x % 2 == 0)
+				((uint16_t *)mem)[x] = 0xffff;
+			if(x % 2 != 0)
+				((uint16_t *)mem)[x] = 0x00000000;
+		}
+		mem += stride;
+	}
+
+}
+
+static void fill_bw_rgb24(const struct util_rgb_info *rgb, void *mem,
+			     unsigned int width, unsigned int height,
+			     unsigned int stride)
+{
+	struct color_rgb24 colors;
+	unsigned int x;
+	unsigned int y;
+
+	for (y = 0; y < height; ++y) {
+		for (x = 0; x < width; ++x) {
+			if(x % 2 == 0)
+				colors.value = 0xffffff;
+			if(x % 2 != 0)
+				colors.value = 0x00000000;
+			((struct color_rgb24 *)mem)[x] = colors;
+		}
+		mem += stride;
+	}
+}
+
+static void fill_bw_rgb32(const struct util_rgb_info *rgb, void *mem,
+			     unsigned int width, unsigned int height,
+			     unsigned int stride)
+{
+	unsigned int x;
+	unsigned int y;
+
+	for (y = 0; y < height; ++y) {
+		for (x = 0; x < width; ++x) {
+			if(x % 2 == 0)
+				((uint32_t *)mem)[x] = 0xffffffff;
+			if(x % 2 != 0)
+				((uint32_t *)mem)[x] = 0x00000000;
+		}
+		mem += stride;
+	}
+}
+
+static void fill_black_white(const struct util_format_info *info, void *planes[3],
+		       unsigned int width, unsigned int height,
+		       unsigned int stride)
+{
+	switch (info->format) {
+	case DRM_FORMAT_UYVY:
+	case DRM_FORMAT_VYUY:
+	case DRM_FORMAT_YUYV:
+	case DRM_FORMAT_YVYU:
+		printf("unsupport bw yuyv\n");
+		return ;
+	case DRM_FORMAT_NV12:
+	case DRM_FORMAT_NV21:
+	case DRM_FORMAT_NV16:
+	case DRM_FORMAT_NV61:
+		printf("unsupport bw yuyv\n");
+		return ;
+	case DRM_FORMAT_YUV420:
+		printf("unsupport bw yuyv\n");
+		return ;
+	case DRM_FORMAT_YVU420:
+		printf("unsupport bw yuyv\n");
+		return ;
+	case DRM_FORMAT_ARGB4444:
+	case DRM_FORMAT_XRGB4444:
+	case DRM_FORMAT_ABGR4444:
+	case DRM_FORMAT_XBGR4444:
+	case DRM_FORMAT_RGBA4444:
+	case DRM_FORMAT_RGBX4444:
+	case DRM_FORMAT_BGRA4444:
+	case DRM_FORMAT_BGRX4444:
+	case DRM_FORMAT_RGB565:
+	case DRM_FORMAT_BGR565:
+	case DRM_FORMAT_ARGB1555:
+	case DRM_FORMAT_XRGB1555:
+	case DRM_FORMAT_ABGR1555:
+	case DRM_FORMAT_XBGR1555:
+	case DRM_FORMAT_RGBA5551:
+	case DRM_FORMAT_RGBX5551:
+	case DRM_FORMAT_BGRA5551:
+	case DRM_FORMAT_BGRX5551:
+		return fill_bw_rgb16(&info->rgb, planes[0], width, height, stride);
+	case DRM_FORMAT_BGR888:
+	case DRM_FORMAT_RGB888:
+		return fill_bw_rgb24(&info->rgb, planes[0], width, height, stride);
+	case DRM_FORMAT_ARGB8888:
+	case DRM_FORMAT_XRGB8888:
+	case DRM_FORMAT_ABGR8888:
+	case DRM_FORMAT_XBGR8888:
+	case DRM_FORMAT_RGBA8888:
+	case DRM_FORMAT_RGBX8888:
+	case DRM_FORMAT_BGRA8888:
+	case DRM_FORMAT_BGRX8888:
+	case DRM_FORMAT_ARGB2101010:
+	case DRM_FORMAT_XRGB2101010:
+	case DRM_FORMAT_ABGR2101010:
+	case DRM_FORMAT_XBGR2101010:
+	case DRM_FORMAT_RGBA1010102:
+	case DRM_FORMAT_RGBX1010102:
+	case DRM_FORMAT_BGRA1010102:
+	case DRM_FORMAT_BGRX1010102:
+		return fill_bw_rgb32(&info->rgb, planes[0],
+					width, height, stride);
+	case DRM_FORMAT_XRGB16161616F:
+	case DRM_FORMAT_XBGR16161616F:
+	case DRM_FORMAT_ARGB16161616F:
+	case DRM_FORMAT_ABGR16161616F:
+	default:
+		printf("Error(fill_black_white): unsupported test pattern\n");
+		break;
 	}
 }
 
@@ -2097,6 +2225,8 @@ void util_fill_pattern(uint32_t format, enum util_fill_pattern pattern,
 		return fill_v_colorbar(info, planes, width, height, stride);
 	case UTIL_PATTERN_SOLID:
 		return fill_solid(info, planes, width, height, stride, value);
+	case UTIL_PATTERN_BW:
+		return fill_black_white(info, planes, width, height, stride);
 	default:
 		printf("Error: unsupported test pattern %u.\n", pattern);
 		break;
@@ -2111,6 +2241,7 @@ static const char *pattern_names[] = {
 	[UTIL_PATTERN_HCB] = "hcolorbar",
 	[UTIL_PATTERN_VCB] = "vcolorbar",
 	[UTIL_PATTERN_SOLID] = "solid",
+	[UTIL_PATTERN_BW] = "bw",
 };
 
 enum util_fill_pattern util_pattern_enum(const char *name)
