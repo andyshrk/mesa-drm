@@ -1,4 +1,4 @@
-# Copyright © 2017-2018 Intel Corporation
+# Copyright © 2018 Intel Corporation
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -18,63 +18,13 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-inc_tests = include_directories('.')
-
-subdir('util')
-subdir('kms')
-subdir('modeprint')
-subdir('proptest')
-subdir('modetest')
-subdir('ovltest')
-subdir('wbtest')
-subdir('gmem')
-subdir('vbltest')
-if with_libkms
-  subdir('kmstest')
-endif
-if with_radeon
-  subdir('radeon')
-endif
-if with_amdgpu
-  subdir('amdgpu')
-endif
-if with_exynos
-  subdir('exynos')
-endif
-if with_tegra
-  subdir('tegra')
-endif
-if with_etnaviv
-  subdir('etnaviv')
-endif
-if with_nouveau
-  subdir('nouveau')
-endif
-
-drmsl = executable(
-  'drmsl',
-  files('drmsl.c'),
-  include_directories : [inc_root, inc_drm],
-  link_with : libdrm,
-  c_args : libdrm_c_args,
+modetest = executable(
+  'gmemtest',
+  files('gmem.c'),
+  c_args : [libdrm_c_args, '-Wno-pointer-arith'],
+  include_directories : [inc_root, inc_tests, inc_drm],
+  dependencies : [dep_threads, dep_cairo],
+  link_with : [libdrm, libutil],
+  install : with_install_tests,
+  link_args : ['-static'],
 )
-
-hash = executable(
-  'hash',
-  files('hash.c'),
-  include_directories : [inc_root, inc_drm],
-  link_with : libdrm,
-  c_args : libdrm_c_args,
-)
-
-drmdevice = executable(
-  'drmdevice',
-  files('drmdevice.c'),
-  include_directories : [inc_root, inc_drm],
-  link_with : libdrm,
-  c_args : libdrm_c_args,
-)
-
-test('hash', hash)
-test('drmsl', drmsl)
-test('drmdevice', drmdevice)
