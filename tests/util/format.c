@@ -55,6 +55,9 @@ static const struct util_format_info format_info[] = {
 	/* YUV planar */
 	{ DRM_FORMAT_YUV420, "YU12", MAKE_YUV_INFO(YUV_YCbCr, 2, 2, 1) },
 	{ DRM_FORMAT_YVU420, "YV12", MAKE_YUV_INFO(YUV_YCrCb, 2, 2, 1) },
+	/* YUV420_8BIT/YUV420_10BIT only used for AFBC test now */
+	{ DRM_FORMAT_YUV420_8BIT, "YU08", MAKE_YUV_INFO(YUV_YCrCb, 2, 2, 2) },
+	{ DRM_FORMAT_YUV420_10BIT, "YU10", MAKE_YUV_INFO(YUV_YCrCb, 2, 2, 2) },
 	/* RGB16 */
 	{ DRM_FORMAT_ARGB4444, "AR12", MAKE_RGB_INFO(4, 8, 4, 4, 4, 0, 4, 12) },
 	{ DRM_FORMAT_XRGB4444, "XR12", MAKE_RGB_INFO(4, 8, 4, 4, 4, 0, 0, 0) },
