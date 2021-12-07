@@ -163,6 +163,9 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 		bpp = 8; /* this bpp is for Y channel bits when format if YUV */
 		break;
 	case DRM_FORMAT_NV12_10:
+	case DRM_FORMAT_NV15:
+	case DRM_FORMAT_NV20:
+	case DRM_FORMAT_NV30:
 		bpp = 10;
 		break;
 	case DRM_FORMAT_YUV420_8BIT:
@@ -238,6 +241,7 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 	case DRM_FORMAT_YUV420:
 	case DRM_FORMAT_YVU420:
 	case DRM_FORMAT_NV12_10:
+	case DRM_FORMAT_NV15:
 	case DRM_FORMAT_YUV420_8BIT:
 	case DRM_FORMAT_YUV420_10BIT:
 		virtual_height = height * 3 / 2;
@@ -245,10 +249,12 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 
 	case DRM_FORMAT_NV16:
 	case DRM_FORMAT_NV61:
+	case DRM_FORMAT_NV20:
 		virtual_height = height * 2;
 		break;
 	case DRM_FORMAT_NV24:
 	case DRM_FORMAT_NV42:
+	case DRM_FORMAT_NV30:
 		virtual_height = height * 3;
 		break;
 
@@ -301,6 +307,8 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 	case DRM_FORMAT_NV16:
 	case DRM_FORMAT_NV61:
 	case DRM_FORMAT_NV12_10:
+	case DRM_FORMAT_NV15:
+	case DRM_FORMAT_NV20:
 		offsets[0] = 0;
 		handles[0] = bo->handle;
 		pitches[0] = bo->pitch;
@@ -311,6 +319,7 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 		break;
 	case DRM_FORMAT_NV24:
 	case DRM_FORMAT_NV42:
+	case DRM_FORMAT_NV30:
 		offsets[0] = 0;
 		handles[0] = bo->handle;
 		pitches[0] = bo->pitch;
@@ -390,15 +399,15 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 			/* take care of stride >= act_width */
 			for(i = 0; i < height; i++)
 				read(pic_fd, virtual + i * pitches[0], width * bpp >> 3);
-			if (format == DRM_FORMAT_NV12 || format == DRM_FORMAT_NV21) {
+			if (format == DRM_FORMAT_NV12 || format == DRM_FORMAT_NV21 || format == DRM_FORMAT_NV15) {
 				for(i = 0; i < height / 2; i++)
-					read(pic_fd, virtual + offsets[1] + i * pitches[1], width);
-			} else if (format == DRM_FORMAT_NV16 || format == DRM_FORMAT_NV61) {
+					read(pic_fd, virtual + offsets[1] + i * pitches[1], width * bpp >> 3);
+			} else if (format == DRM_FORMAT_NV16 || format == DRM_FORMAT_NV61 || format == DRM_FORMAT_NV20) {
 				for(i = 0; i < height; i++)
-					read(pic_fd, virtual + offsets[1] + i * pitches[1], width);
-			} else if (format == DRM_FORMAT_NV24 || format == DRM_FORMAT_NV42) {
+					read(pic_fd, virtual + offsets[1] + i * pitches[1], width * bpp >> 3);
+			} else if (format == DRM_FORMAT_NV24 || format == DRM_FORMAT_NV42 || format == DRM_FORMAT_NV30) {
 				for(i = 0; i < height; i++)
-					read(pic_fd, virtual + offsets[1] + i * pitches[1], width << 1);
+					read(pic_fd, virtual + offsets[1] + i * pitches[1], (width * bpp >> 3) * 2);
 			}
 		} else {
 			fprintf(stderr, "failed to open %s: %s\n", pic_name, strerror(errno));
