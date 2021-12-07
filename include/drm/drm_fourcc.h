@@ -423,6 +423,7 @@ extern "C" {
 #define DRM_FORMAT_MOD_VENDOR_ARM     0x08
 #define DRM_FORMAT_MOD_VENDOR_ALLWINNER 0x09
 #define DRM_FORMAT_MOD_VENDOR_AMLOGIC 0x0a
+#define DRM_FORMAT_MOD_VENDOR_ROCKCHIP 0x0b
 
 /* add more to the end as needed */
 
@@ -1584,6 +1585,12 @@ drm_fourcc_canonicalize_nvidia_format_mod(__u64 modifier)
 	(((value) >> AMD_FMT_MOD_##field##_SHIFT) & AMD_FMT_MOD_##field##_MASK)
 #define AMD_FMT_MOD_CLEAR(field) \
 	(~((__u64)AMD_FMT_MOD_##field##_MASK << AMD_FMT_MOD_##field##_SHIFT))
+
+#define ROCKCHIP_TILED_BLOCK_SIZE_MASK      0xf
+#define ROCKCHIP_TILED_BLOCK_SIZE_8x8   (1ULL)
+#define ROCKCHIP_TILED_BLOCK_SIZE_4x4   (2ULL)
+
+#define DRM_FORMAT_MOD_ROCKCHIP_TILED(_mode) fourcc_mod_code(ROCKCHIP, _mode)
 
 #if defined(__cplusplus)
 }
