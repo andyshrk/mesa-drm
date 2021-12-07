@@ -309,6 +309,7 @@ extern "C" {
 #define DRM_FORMAT_MOD_VENDOR_BROADCOM 0x07
 #define DRM_FORMAT_MOD_VENDOR_ARM     0x08
 #define DRM_FORMAT_MOD_VENDOR_ALLWINNER 0x09
+#define DRM_FORMAT_MOD_VENDOR_ROCKCHIP 0x0b
 
 /* add more to the end as needed */
 
@@ -755,6 +756,12 @@ extern "C" {
  * both in row-major order.
  */
 #define DRM_FORMAT_MOD_ALLWINNER_TILED fourcc_mod_code(ALLWINNER, 1)
+
+#define ROCKCHIP_TILED_BLOCK_SIZE_MASK      0xf
+#define ROCKCHIP_TILED_BLOCK_SIZE_8x8   (1ULL)
+#define ROCKCHIP_TILED_BLOCK_SIZE_4x4   (2ULL)
+
+#define DRM_FORMAT_MOD_ROCKCHIP_TILED(_mode) fourcc_mod_code(ROCKCHIP, _mode)
 
 #if defined(__cplusplus)
 }
