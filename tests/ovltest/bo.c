@@ -156,9 +156,11 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 	case DRM_FORMAT_NV21:
 	case DRM_FORMAT_NV16:
 	case DRM_FORMAT_NV61:
+	case DRM_FORMAT_NV24:
+	case DRM_FORMAT_NV42:
 	case DRM_FORMAT_YUV420:
 	case DRM_FORMAT_YVU420:
-		bpp = 8;
+		bpp = 8; /* this bpp is for Y channel bits when format if YUV */
 		break;
 	case DRM_FORMAT_NV12_10:
 		bpp = 10;
@@ -245,6 +247,11 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 	case DRM_FORMAT_NV61:
 		virtual_height = height * 2;
 		break;
+	case DRM_FORMAT_NV24:
+	case DRM_FORMAT_NV42:
+		virtual_height = height * 3;
+		break;
+
 
 	default:
 		virtual_height = height;
@@ -260,6 +267,7 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 		while (afbc_size > (width * virtual_height * bpp >> 3))
 			virtual_height++;
 	}
+
 	bo = bo_create_dumb(fd, width, virtual_height, bpp);
 	if (!bo)
 		return NULL;
@@ -301,7 +309,15 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 		handles[1] = bo->handle;
 
 		break;
-
+	case DRM_FORMAT_NV24:
+	case DRM_FORMAT_NV42:
+		offsets[0] = 0;
+		handles[0] = bo->handle;
+		pitches[0] = bo->pitch;
+		pitches[1] = pitches[0] * 2;
+		offsets[1] = pitches[0] * height;
+		handles[1] = bo->handle;
+		break;
 	case DRM_FORMAT_YUV420:
 	case DRM_FORMAT_YVU420:
 		offsets[0] = 0;
@@ -371,11 +387,18 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 		pic_fd = open(pic_name, O_RDONLY);
 
 		if (pic_fd) {
+			/* take care of stride >= act_width */
 			for(i = 0; i < height; i++)
 				read(pic_fd, virtual + i * pitches[0], width * bpp >> 3);
 			if (format == DRM_FORMAT_NV12 || format == DRM_FORMAT_NV21) {
 				for(i = 0; i < height / 2; i++)
 					read(pic_fd, virtual + offsets[1] + i * pitches[1], width);
+			} else if (format == DRM_FORMAT_NV16 || format == DRM_FORMAT_NV61) {
+				for(i = 0; i < height; i++)
+					read(pic_fd, virtual + offsets[1] + i * pitches[1], width);
+			} else if (format == DRM_FORMAT_NV24 || format == DRM_FORMAT_NV42) {
+				for(i = 0; i < height; i++)
+					read(pic_fd, virtual + offsets[1] + i * pitches[1], width << 1);
 			}
 		} else {
 			fprintf(stderr, "failed to open %s: %s\n", pic_name, strerror(errno));
@@ -383,7 +406,6 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 
 		bo_unmap(bo);
 	}
-
 
 	return bo;
 }
