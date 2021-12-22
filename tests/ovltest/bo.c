@@ -203,7 +203,6 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 	case DRM_FORMAT_RGB888:
 		bpp = 24;
 		break;
-
 	case DRM_FORMAT_ARGB8888:
 	case DRM_FORMAT_XRGB8888:
 	case DRM_FORMAT_ABGR8888:
@@ -220,6 +219,7 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 	case DRM_FORMAT_RGBX1010102:
 	case DRM_FORMAT_BGRA1010102:
 	case DRM_FORMAT_BGRX1010102:
+	case DRM_FORMAT_Y210:
 		bpp = 32;
 		break;
 
@@ -246,10 +246,10 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 	case DRM_FORMAT_YUV420_10BIT:
 		virtual_height = height * 3 / 2;
 		break;
-
 	case DRM_FORMAT_NV16:
 	case DRM_FORMAT_NV61:
 	case DRM_FORMAT_NV20:
+	case DRM_FORMAT_Y210:
 		virtual_height = height * 2;
 		break;
 	case DRM_FORMAT_NV24:
@@ -257,8 +257,6 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 	case DRM_FORMAT_NV30:
 		virtual_height = height * 3;
 		break;
-
-
 	default:
 		virtual_height = height;
 		break;
@@ -296,6 +294,7 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 	case DRM_FORMAT_YVYU:
 	case DRM_FORMAT_YUV420_8BIT:
 	case DRM_FORMAT_YUV420_10BIT:
+	case DRM_FORMAT_Y210:
 		offsets[0] = 0;
 		handles[0] = bo->handle;
 		pitches[0] = bo->pitch;
