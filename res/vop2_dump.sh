@@ -74,71 +74,71 @@ if  [ "$STAT" != "" ]; then
 	print
 fi
 
-STAT=`cat /sys/kernel/debug/dri/0/state  | grep " Cluster0-win0" -A 2 | grep "fb=0"`
+STAT=`cat /sys/kernel/debug/dri/0/state  | grep " Cluster0-win0" -A 2 | grep "fb=[1-9]"`
 if [ "$1" = "a" ]; then
 	STAT="ACTIVE"
 fi
-if  [ "$STAT" = "" ]; then
+if  [ "$STAT" != "" ]; then
 	echo "Cluster0: "
 	io -r -4 -l 0x130 $C0
 	print
 fi
 
-STAT=`cat /sys/kernel/debug/dri/0/state  | grep " Cluster1-win0" -A 2 | grep "fb=0"`
+STAT=`cat /sys/kernel/debug/dri/0/state  | grep " Cluster1-win0" -A 2 | grep "fb=[1-9]"`
 if [ "$1" = "a" ]; then
 	STAT="ACTIVE"
 fi
-if  [ "$STAT" = "" ]; then
+if  [ "$STAT" != "" ]; then
 	echo "Cluster1: "
 	io -r -4 -l 0x130 $C1
 	print
 fi
 
-STAT=`cat /sys/kernel/debug/dri/0/state  | grep " Cluster2-win0" -A 2 | grep "fb=0"`
+STAT=`cat /sys/kernel/debug/dri/0/state  | grep " Cluster2-win0" -A 2 | grep "fb=[1-9]"`
 if [ "$1" = "a" ]; then
 	STAT="ACTIVE"
 fi
-if  [ "$STAT" = "" ]; then
+if  [ "$STAT" != "" ]; then
 	echo "Cluster2: "
 	io -r -4 -l 0x130 $C2
 	print
 fi
 
-STAT=`cat /sys/kernel/debug/dri/0/state  | grep " Cluster3-win0" -A 2 | grep "fb=0"`
+STAT=`cat /sys/kernel/debug/dri/0/state  | grep " Cluster3-win0" -A 2 | grep "fb=[1-9]"`
 if [ "$1" = "a" ]; then
 	STAT="ACTIVE"
 fi
-if  [ "$STAT" = "" ]; then
+if  [ "$STAT" != "" ]; then
 	echo "Cluster3: "
 	io -r -4 -l 0x130 $C3
 	print
 fi
 
-STAT=`cat /sys/kernel/debug/dri/0/state  | grep " Esmart0-win0" -A 2 | grep "fb=0"`
+STAT=`cat /sys/kernel/debug/dri/0/state  | grep " Esmart0-win0" -A 2 | grep "fb=[1-9]"`
 if [ "$1" = "a" ]; then
 	STAT="ACTIVE"
 fi
-if  [ "$STAT" = "" ]; then
+if  [ "$STAT" != "" ]; then
 	echo "Esmart0: "
 	io -r -4 -l 0x100 $E0
 	print
 fi
 
-STAT=`cat /sys/kernel/debug/dri/0/state  | grep " Esmart1-win0" -A 2 | grep "fb=0"`
+STAT=`cat /sys/kernel/debug/dri/0/state  | grep " Esmart1-win0" -A 2 | grep "fb=[1-9]"`
 if [ "$1" = "a" ]; then
 	STAT="ACTIVE"
 fi
-if  [ "$STAT" = "" ]; then
+if  [ "$STAT" != "" ]; then
 	echo "Esmart1: "
 	io -r -4 -l 0x100 $E1
 	print
 fi
 
-STAT=`cat /sys/kernel/debug/dri/0/state  | grep -E " Smart0-win0| Esmart2-win0" -A 2 | grep "fb=0"`
+STAT=`cat /sys/kernel/debug/dri/0/state  | grep -E " Smart0-win0| Esmart2-win0" -A 2 | grep "fb=[1-9]"`
 if [ "$1" = "a" ]; then
 	STAT="ACTIVE"
 fi
-if  [ "$STAT" = "" ]; then
+if  [ "$STAT" != "" ]; then
 	if [ "$SOC" = "rk356x" ]; then
 		echo "Smart0: "
 	else
@@ -149,7 +149,7 @@ if  [ "$STAT" = "" ]; then
 	print
 fi
 
-STAT=`cat /sys/kernel/debug/dri/0/state  | grep -E " Smart1-win0| Esmart3-win0" -A 2 | grep "fb=0"`
+STAT=`cat /sys/kernel/debug/dri/0/state  | grep -E " Smart1-win0| Esmart3-win0" -A 2 | grep "fb=[1-9]"`
 if [ "$1" = "a" ]; then
 	STAT="ACTIVE"
 fi
