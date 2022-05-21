@@ -1,0 +1,16 @@
+[paths]
+prefix = '/srv/WorkSpace/opensource/drm/installdir'
+
+[binaries]
+c = '/usr/local/toolchain/gcc-linaro-6.4.1-2017.11-x86_64_aarch64-linux-gnu/bin/aarch64-linux-gnu-gcc'
+cpp = '/usr/local/toolchain/gcc-linaro-6.4.1-2017.11-x86_64_aarch64-linux-gnu/bin/aarch64-linux-gnu-c++'
+ar = '/usr/local/toolchain/gcc-linaro-6.4.1-2017.11-x86_64_aarch64-linux-gnu/bin/aarch64-linux-gnu-ar'
+strip = '/usr/local/toolchain/gcc-linaro-6.4.1-2017.11-x86_64_aarch64-linux-gnu/bin/aarch64-linux-gnu-strip'
+pkgconfig = '/usr/bin/pkg-config'
+
+[host_machine]
+system = 'linux'
+cpu_family = 'aarch64'
+cpu = 'aarch64'
+endian = 'little'
+
