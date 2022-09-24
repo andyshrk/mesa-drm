@@ -1,0 +1,4 @@
+Pay attention to the ALIGN or ROUND_UP of pitch at
+the platform drm dirver gem_dump_create function,
+
+especiall when test width NV12/NV15 raw file.
