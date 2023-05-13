@@ -1286,6 +1286,23 @@ static void atomic_clear_FB(struct device *dev, struct plane_arg *p, unsigned in
 	}
 }
 
+static void atomic_clear_wb_FB(struct device *dev, struct pipe_arg *pipes, unsigned int count)
+{
+	unsigned int i;
+
+	for (i = 0; i < count; i++) {
+		struct pipe_arg *pipe = &pipes[i];
+
+		if (pipe->mode == NULL)
+			continue;
+
+		if (pipe->wbc) {
+			drmModeRmFB(dev->fd, pipe->fb_id);
+			pipe->fb_id = 0;
+		}
+	}
+}
+
 static int atomic_add_wbc_fb(struct device *dev, struct pipe_arg *pipe)
 {
 	uint32_t handles[4] = {0}, pitches[4] = {0}, offsets[4] = {0};
@@ -1427,6 +1444,15 @@ static void atomic_clear_mode(struct device *dev, struct pipe_arg *pipes, unsign
 
 		if (pipe->mode == NULL)
 			continue;
+
+		/*
+		 * we only set fb to null to disable a writeback connector to
+		 * avoid triger crtc disable/enable on the writeback display path.
+		 */
+		if (pipe->wbc) {
+			add_property(dev, pipe->con_ids[0], "WRITEBACK_FB_ID",0);
+			continue;
+		}
 
 		for (j = 0; j < pipe->num_cons; ++j)
 			add_property(dev, pipe->con_ids[j], "CRTC_ID",0);
@@ -1979,6 +2005,7 @@ int main(int argc, char **argv)
 		}
 
 		atomic_clear_FB(&dev, plane_args, plane_count);
+		atomic_clear_wb_FB(&dev, pipe_args, count);
 	}
 
 	drmModeAtomicFree(dev.req);
