@@ -1337,7 +1337,7 @@ static void filecpoy_for_fb(struct drm_fb *fb, const char *file)
 
 static void filewrite(void *buf, uint32_t size, const char *file)
 {
-	int fd = open(file, O_WRONLY | O_CREAT);
+	int fd = open(file, O_WRONLY | O_CREAT, 0666);
 
 	if (fd < 0) {
 		printf("cat not open file\n");
