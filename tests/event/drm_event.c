@@ -14,6 +14,7 @@
  * limitations under the License.
  *
  */
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -176,6 +177,36 @@ static void drm_fdevent_add(int epoll_fd, struct drm_backend* b)
 		printf("epoll_ctl vsync failed");
 }
 
+static void usage(char *name)
+{
+	fprintf(stderr, "usage: %s [-w]\n", name);
+	fprintf(stderr, "\n");
+	fprintf(stderr, "options:\n");
+	fprintf(stderr, "  -D DEVICE  open the given device\n");
+	fprintf(stderr, "  -M MODULE  open the given module\n");
+	fprintf(stderr, "  -w       drmWaitVBlank\n");
+	exit(0);
+}
+
+/*
+ * Get vblank information by two way:
+ * 1: 
+ *   poll call drmWaitVBlank(b.drm_fd, &vbl) with 
+ *   vbl.request.type = DRM_VBLANK_RELATIVE
+ *   vbl.request.sequence = 1;
+ *   the vblank seq and timestamps will return in vbl.request
+ * 2: 
+ *  epoll_wait DRM_EVENT_VBLANK  
+ *  ret = drmHandleEvent(fd, &evctx);
+ *  the vblank seq and timestamps will return in
+ *  struct drm_event_vblank 
+ *  than call drmWaitVBlank(b.drm_fd, &vbl) with 
+ *  vbl.request.type = DRM_VBLANK_RELATIVE | DRM_VBLANK_EVENT
+ *  vbl.request.sequence = 1;
+ *  register next vblank event.
+ *
+ */
+static char optstr[] = "D:M:w";
 int main(int argc, char **argv)
 {
 	struct epoll_event events[DRM_EVENTS_MAX];
@@ -184,9 +215,29 @@ int main(int argc, char **argv)
 	const char *device = NULL, *module = NULL;
 	char name[32] = "drm_event_test";
 	int epoll_fd = -1, n, timeout = 1000;
-	int ret;
+	bool wait_for_vblank = false;
+	int ret, c;
 
 	prctl(PR_SET_NAME, name);
+
+	opterr = 0;
+	while ((c = getopt(argc, argv, optstr)) != -1) {
+		switch (c) {
+		case 'D':
+			device = optarg;
+			break;
+		case 'M':
+			module = optarg;
+			break;
+		case 'w':
+			wait_for_vblank = true;
+			break;
+		default:
+			usage(argv[0]);
+			break;
+		}
+	}
+
 
 	b.drm_fd = util_open(device, module);
 	if (b.drm_fd < 0)
@@ -218,27 +269,40 @@ int main(int argc, char **argv)
 	printf("[%ld.%06ld]: %d-start DRM_VBLANK_RELATIVE | DRM_VBLANK_EVENT\n",
 	       vbl.reply.tval_sec, vbl.reply.tval_usec, vbl.reply.sequence);
 
-	while (1) {
-		n = epoll_wait(epoll_fd, events, DRM_EVENTS_MAX, timeout);
-
-		if (!n) {
-			printf("epoll: %d, restart vblank event\n", n);
-			vbl.request.type = DRM_VBLANK_RELATIVE | DRM_VBLANK_EVENT;
+	if (wait_for_vblank) {
+		while (1) {
+			vbl.request.type = DRM_VBLANK_RELATIVE;
 			vbl.request.sequence = 1;
 			ret = drmWaitVBlank(b.drm_fd, &vbl);
 			if (ret != 0) {
 				printf("drmWaitVBlank (relative, event) failed ret: %i\n", ret);
 			}
-
+			printf("[%ld.%06ld]: %d-vblank\n", vbl.reply.tval_sec, vbl.reply.tval_usec,
+			       vbl.reply.sequence);
 		}
+	} else {
+		while (1) {
+			n = epoll_wait(epoll_fd, events, DRM_EVENTS_MAX, timeout);
 
-		for (int i = 0; i < n; i++) {
-			struct epoll_event* ev = events + i;
-			if (ev->data.fd == b.drm_fd && ev->events & EPOLLIN) {
-				drm_event_handler(&b);
+			if (!n) {
+				printf("epoll: %d, restart vblank event\n", n);
+				vbl.request.type = DRM_VBLANK_RELATIVE | DRM_VBLANK_EVENT;
+				vbl.request.sequence = 1;
+				ret = drmWaitVBlank(b.drm_fd, &vbl);
+				if (ret != 0) {
+					printf("drmWaitVBlank (relative, event) failed ret: %i\n", ret);
+				}
+
 			}
-		}
 
+			for (int i = 0; i < n; i++) {
+				struct epoll_event* ev = events + i;
+				if (ev->data.fd == b.drm_fd && ev->events & EPOLLIN) {
+					drm_event_handler(&b);
+				}
+			}
+
+		}
 	}
 
 	close(epoll_fd);
