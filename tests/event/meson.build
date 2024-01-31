@@ -18,60 +18,11 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-inc_tests = include_directories('.')
-
-subdir('util')
-subdir('modeprint')
-subdir('proptest')
-subdir('modetest')
-subdir('ovltest')
-subdir('wbtest')
-subdir('vbltest')
-subdir('event')
-if with_radeon
-  subdir('radeon')
-endif
-if with_amdgpu
-  subdir('amdgpu')
-endif
-if with_exynos
-  subdir('exynos')
-endif
-if with_tegra
-  subdir('tegra')
-endif
-if with_etnaviv
-  subdir('etnaviv')
-endif
-if with_nouveau
-  subdir('nouveau')
-endif
-
-drmsl = executable(
-  'drmsl',
-  files('drmsl.c'),
-  include_directories : [inc_root, inc_drm],
-  link_with : libdrm,
+vbltest = executable(
+  'drm_event',
+  files('drm_event.c'),
   c_args : libdrm_c_args,
-)
-
-hash = executable(
-  'hash',
-  files('hash.c'),
-  include_directories : [inc_root, inc_drm],
-  link_with : libdrm,
-  c_args : libdrm_c_args,
-)
-
-drmdevice = executable(
-  'drmdevice',
-  files('drmdevice.c'),
-  include_directories : [inc_root, inc_drm],
-  link_with : libdrm,
-  c_args : libdrm_c_args,
+  include_directories : [inc_root, inc_tests, inc_drm],
+  link_with : [libdrm, libutil],
   install : with_install_tests,
 )
-
-test('hash', hash)
-test('drmsl', drmsl)
-test('drmdevice', drmdevice)
