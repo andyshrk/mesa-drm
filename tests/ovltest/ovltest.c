@@ -68,7 +68,7 @@
 
 #include "bo.h"
 
-#define PIC_NAME_MAX_LEN	64
+#define PIC_NAME_MAX_LEN	256
 #define PIC_MAX_CNT		8
 
 /*
