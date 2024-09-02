@@ -820,6 +820,7 @@ struct plane_arg {
 	bool has_position;
 	bool afbc_en;
 	bool tiled_en;
+	uint32_t block_w;
 	int32_t rotation;
 	int32_t x, y;
 	uint32_t w, h;
@@ -1154,13 +1155,16 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p, const char 
 			return -1;
 
 		if (p->afbc_en || p->tiled_en) {
-			if (p->afbc_en)
+			if (p->afbc_en && p->block_w == 32)
+				modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_32x8 | AFBC_FORMAT_MOD_SPLIT);
+			else if (p->afbc_en && p->block_w == 16)
 				modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC(1);
 			else if (p->tiled_en)
 				modifiers[0] = DRM_FORMAT_MOD_ROCKCHIP_TILED(1);
 
 			if (get_plane_num(p->fourcc) == 2)
 				modifiers[1] = modifiers[0];
+
 			ret = drmModeAddFB2WithModifiers(dev->fd, p->w, p->h, p->fourcc, handles, pitches,
 						   offsets, modifiers, &p->fb_id, DRM_MODE_FB_MODIFIERS);
 		} else {
@@ -1590,10 +1594,15 @@ static int parse_plane(struct plane_arg *plane, const char *p)
 	if (*end == '@') {
 		strncpy(plane->format_str, end + 1, 4);
 		plane->format_str[4] = '\0';
-		if (strstr(end + 5, "@afbc"))
+		if (strstr(end + 5, "@afbc32x8")) {
 			plane->afbc_en = true;
-		else if (strstr(end + 5, "@tile"))
+			plane->block_w = 32;
+		} else if (strstr(end + 5, "@afbc")) {
+			plane->afbc_en = true;
+			plane->block_w = 16;
+		} else if (strstr(end + 5, "@tile")) {
 			plane->tiled_en = true;
+		}
 
 	} else {
 		strcpy(plane->format_str, "XR24");
