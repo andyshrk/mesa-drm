@@ -394,7 +394,7 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 	if (pic_name) {
 		pic_fd = open(pic_name, O_RDONLY);
 
-		if (pic_fd) {
+		if (pic_fd > 0) {
 			/* take care of stride >= act_width */
 			for(i = 0; i < height; i++)
 				read(pic_fd, virtual + i * pitches[0], width * bpp >> 3);
