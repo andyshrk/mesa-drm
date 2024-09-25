@@ -51,6 +51,7 @@
 #include <strings.h>
 #include <errno.h>
 #include <poll.h>
+#include <pthread.h>
 #include <sys/time.h>
 #if HAVE_SYS_SELECT_H
 #include <sys/select.h>
@@ -122,6 +123,8 @@ struct resources {
 
 struct device {
 	int fd;
+
+	int error_event_fd;
 
 	struct resources *resources;
 
@@ -836,6 +839,11 @@ struct plane_arg {
 	unsigned int fourcc;
 };
 
+struct error_event {
+	struct device *dev;
+	pthread_t monitor_thread;
+};
+
 static drmModeModeInfo *
 connector_find_mode(struct device *dev, uint32_t con_id, const char *mode_str,
 	const float vrefresh)
@@ -1376,6 +1384,124 @@ static void write_wb_file(struct pipe_arg *pipes, unsigned int count)
 
 }
 
+enum rockchip_drm_error_event_type {
+	ROCKCHIP_DRM_ERROR_IOMMU_FAULT    = (1 << 0),
+	ROCKCHIP_DRM_ERROR_POST_BUF_EMPTY = (1 << 1),
+};
+
+static int drm_error_event_handler(int fd, drmEventContextPtr evctx)
+{
+	struct drm_event *e;
+	struct drm_event_vblank *vblank;
+	struct timespec time = { 0 };
+	unsigned long diff_usec;
+	char buffer[1024];
+	int len, i, err;
+
+	err = lseek(fd, 0, SEEK_SET);
+	if (err < 0) {
+		fprintf(stderr, "failed to seeking to vcnt: %s\n", strerror(errno));
+		return -1;
+	}
+
+	len = read(fd, buffer, sizeof buffer);
+	if (len < (int)sizeof *e) {
+		fprintf(stderr, "read failed len: %d polled_time:%lu:%06lu %s\n", len, time.tv_sec, time.tv_nsec / 1000, strerror(errno));
+		return -1;
+	}
+	clock_gettime(CLOCK_MONOTONIC, &time);
+
+	i = 0;
+
+	while (i < len) {
+		e = (struct drm_event *)(buffer + i);
+		fprintf(stderr, "e->length: %d read len: %d\n", e->length, len);
+
+		switch (e->type) {
+		case ROCKCHIP_DRM_ERROR_IOMMU_FAULT:
+			vblank = (struct drm_event_vblank *) e;
+			diff_usec = (time.tv_sec * 1000000 +  time.tv_nsec/1000) - (vblank->tv_sec * 1000000 + vblank->tv_usec);
+			fprintf(stderr, "err_iommu_falut count: %-8d event_time: %d:%06d polled_time: %lu:%06lu diff: %06lu\n",
+				vblank->sequence, vblank->tv_sec, vblank->tv_usec, time.tv_sec, time.tv_nsec/1000, diff_usec);
+			break;
+		case ROCKCHIP_DRM_ERROR_POST_BUF_EMPTY:
+			vblank = (struct drm_event_vblank *) e;
+			diff_usec = (time.tv_sec * 1000000 +  time.tv_nsec/1000) - (vblank->tv_sec * 1000000 + vblank->tv_usec);
+			fprintf(stderr, "err_iommu_falut count: %-8d event_time: %d:%06d polled_time: %lu:%06lu diff: %06lu\n",
+				vblank->sequence, vblank->tv_sec, vblank->tv_usec, time.tv_sec, time.tv_nsec/1000, diff_usec);
+			break;
+		default:
+			break;
+		}
+
+		i += e->length ? e->length : sizeof(struct drm_event_vblank);
+	}
+
+	return 0;
+}
+
+static void *drm_error_monitor_thread(void *data) {
+	struct error_event *evt = (struct error_event *)data;
+	struct device *dev = evt->dev;
+	struct pollfd poll_fds[1];
+	char buffer[1024];
+	int ret, fd;
+	int i = 0;
+
+	fd = dev->error_event_fd;
+	poll_fds[0].fd = fd;
+	poll_fds[0].events = POLLPRI;
+
+	/*
+	 * reference:
+	 * tools/leds/led_hw_brightness_mon.c
+	 * tools/testing/selftests/thermal/intel/power_floor/power_floor_test.c
+	 * Documentation/driver-api/usb/usb.rst
+	 */
+	ret = read(fd, buffer, sizeof(buffer));
+	fprintf(stderr, "read %d bytes before poll\n", ret);
+
+	while (1) {
+		fprintf(stderr, "start poll error event(%d)", ++i);
+		poll_fds[0].revents = 0;
+		ret = poll(poll_fds, 1, -1);
+		fprintf(stderr, "polled error event(%d), ret: %d revents: 0x%08x\n",
+			i, ret, poll_fds[0].revents);
+
+		if (ret < 0) {
+			fprintf(stderr, "error poll vcnt(ret=%d) : %s\n", ret, strerror(errno));
+			continue;
+		}
+
+		//if (poll_fds[0].revents & POLLERR)
+		//	continue;
+
+		if (poll_fds[0].revents & (POLLPRI | POLLRDBAND))
+			drm_error_event_handler(fd, NULL);
+	}
+
+	return NULL;
+}
+
+static void drm_create_error_monitor_thread(struct device *dev)
+{
+	struct error_event *evt;
+	struct sched_param param;
+	int policy;
+	int ret;
+
+	evt = calloc(1, sizeof(*evt));
+	evt->dev = dev;
+
+	ret = pthread_create(&evt->monitor_thread, NULL, drm_error_monitor_thread, (void *)evt);
+	if (ret < 0)
+		fprintf(stderr,"%s couldn't create display errr monitor thread\n", __func__);
+
+	pthread_getschedparam(evt->monitor_thread, &policy, &param);
+	param.sched_priority = sched_get_priority_max(SCHED_FIFO) ;
+	pthread_setschedparam(evt->monitor_thread, SCHED_FIFO, &param);
+}
+
 static void atomic_set_mode(struct device *dev, struct pipe_arg *pipes, unsigned int count)
 {
 	unsigned int i;
@@ -1715,12 +1841,11 @@ static int pipe_resolve_connectors(struct device *dev, struct pipe_arg *pipe)
 	return 0;
 }
 
-static char optstr[] = "acdD:efF:M:P:ps:Cvw:ot";
+static char optstr[] = "acdD:efF:M:P:ps:Cvw:otE";
 
 int main(int argc, char **argv)
 {
 	struct device dev;
-
 	int c;
 	int encoders = 0, connectors = 0, crtcs = 0, planes = 0, framebuffers = 0;
 	int drop_master = 0;
@@ -1741,6 +1866,7 @@ int main(int argc, char **argv)
 	unsigned int c_count = 0;
 	bool c_increase_mode;
 	bool one_shot = false;
+	bool error_monitor = false;
 	drmVersionPtr version;
 	int ret;
 
@@ -1833,6 +1959,9 @@ int main(int argc, char **argv)
 
 			prop_count++;
 			break;
+		case 'E':
+			error_monitor = true;
+			break;
 		default:
 			usage(argv[0]);
 			break;
@@ -1897,6 +2026,17 @@ int main(int argc, char **argv)
 		set_property(&dev, &prop_args[i]);
 
 	dev.req = drmModeAtomicAlloc();
+
+	if (error_monitor) {
+		dev.error_event_fd = open("/sys/devices/platform/display-subsystem/error_event", O_RDONLY);
+
+		if (dev.error_event_fd < 0) {
+			fprintf(stderr, "failed to open error_event_event node: %s\n", strerror(errno));
+			dev.error_event_fd = 0;
+		} else {
+			drm_create_error_monitor_thread(&dev);
+		}
+	}
 
 	if (count) {
 		uint64_t cap = 0;
@@ -1999,6 +2139,9 @@ int main(int argc, char **argv)
 		atomic_clear_FB(&dev, plane_args, plane_count);
 		atomic_clear_wb_FB(&dev, pipe_args, count);
 	}
+
+	if (error_monitor)
+		getchar();
 
 	drmModeAtomicFree(dev.req);
 
