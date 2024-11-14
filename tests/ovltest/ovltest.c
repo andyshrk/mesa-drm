@@ -1330,41 +1330,13 @@ static int atomic_add_wbc_fb(struct device *dev, struct pipe_arg *pipe)
 	return 0;
 }
 
-static int get_bpp(int fourcc)
-{
-	int bpp = 0;
-
-	switch (fourcc)
-	{
-	case DRM_FORMAT_NV12:
-		bpp = 12;
-		break;
-	case DRM_FORMAT_RGB565:
-		bpp = 16;
-		break;
-	case DRM_FORMAT_RGB888:
-	case DRM_FORMAT_BGR888:
-		bpp = 24;
-		break;
-	case DRM_FORMAT_ARGB8888:
-		bpp = 32;
-		break;
-	default:
-		fprintf(stderr, "unsupported format: %x\n", fourcc);
-	}
-	return bpp;
-}
-
 static void write_wb_file(struct pipe_arg *pipes, unsigned int count)
 {
 	unsigned int i;
-	unsigned int w, h;
 	int fd;
 
 	for (i = 0; i < count; i++) {
 		struct pipe_arg *pipe = &pipes[i];
-		w = pipe->mode->hdisplay;
-		h =  pipe->mode->vdisplay;
 
 		if (pipe->wbc) {
 			/*
@@ -1377,7 +1349,7 @@ static void write_wb_file(struct pipe_arg *pipes, unsigned int count)
 				return;
 			}
 			printf("write data to /data/wb.bin ...");
-			write(fd, pipe->bo->ptr, w * h * get_bpp(pipe->fourcc)>>3);
+			write(fd, pipe->bo->ptr, pipe->bo->size);
 			printf("done\n");
 		}
 	}
