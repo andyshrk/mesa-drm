@@ -822,6 +822,7 @@ struct plane_arg {
 	uint32_t crtc_id;  /* the id of CRTC to bind to */
 	bool has_position;
 	bool afbc_en;
+	bool afbc_ytr_en;
 	bool tiled_en;
 	uint32_t block_w;
 	int32_t rotation;
@@ -1165,6 +1166,8 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p, const char 
 		if (p->afbc_en || p->tiled_en) {
 			if (p->afbc_en && p->block_w == 32)
 				modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_32x8 | AFBC_FORMAT_MOD_SPLIT);
+			else if (p->afbc_en && p->afbc_ytr_en && p->block_w == 16)
+				modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC( 1 | AFBC_FORMAT_MOD_YTR);
 			else if (p->afbc_en && p->block_w == 16)
 				modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC(1);
 			else if (p->tiled_en)
@@ -1695,6 +1698,10 @@ static int parse_plane(struct plane_arg *plane, const char *p)
 		if (strstr(end + 5, "@afbc32x8")) {
 			plane->afbc_en = true;
 			plane->block_w = 32;
+		} else if (strstr(end + 5, "@afbcytr")) {
+			plane->afbc_en = true;
+			plane->afbc_ytr_en = true;
+			plane->block_w = 16;
 		} else if (strstr(end + 5, "@afbc")) {
 			plane->afbc_en = true;
 			plane->block_w = 16;
@@ -1767,7 +1774,7 @@ static void usage(char *name)
 
 
 	fprintf(stderr, "\n Test options:\n\n");
-	fprintf(stderr, "\t-P <plane_id>@<crtc_id>:<w>x<h>[:<crtc_w>x<crtc_h>][@stride:vir_w][+<x>+<y>][*<scale>][@<format>][@afbc][@rotatex/y/90/270]\tset a plane\n");
+	fprintf(stderr, "\t-P <plane_id>@<crtc_id>:<w>x<h>[:<crtc_w>x<crtc_h>][@stride:vir_w][+<x>+<y>][*<scale>][@<format>][@afbc][@afbc32x8][@afbcytr][@rotatex/y/90/270]\tset a plane\n");
 	fprintf(stderr, "\t-s <connector_id>[,<connector_id>][@<crtc_id>]:[#<mode index>]<mode>[-<vrefresh>][@<format>]\tset a mode\n");
 	fprintf(stderr, "\t-C\ttest hw cursor\n");
 	fprintf(stderr, "\t-v\ttest vsynced page flipping\n");
