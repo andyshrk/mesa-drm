@@ -1,4 +1,4 @@
 MODETEST_FILES := \
-	fourcc.c \
+	drm_format.c \
 	drm_format.h \
 	fbdump.c
