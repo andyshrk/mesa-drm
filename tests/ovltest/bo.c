@@ -268,6 +268,15 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 	 */
 	if (is_afbc) {
 		afbc_size = get_afbc_size(width, virtual_height, bpp);
+		/*
+		 * The calculation of the size of the afbc buffer is relatively
+		 * complex:
+		 * according to mesa: panfrost_create_kms_dumb_buffer_for_resource
+		 * pan_image_layout_init,
+		 * The calculated size will be larger than what we actually calculate here.
+		 * We will first simply do an upward PAGE alignment to keep the code simpler.
+		 */
+		afbc_size = ALIGN(afbc_size, 4096);
 		while (afbc_size > (width * virtual_height * bpp >> 3))
 			virtual_height++;
 	}
@@ -395,17 +404,22 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 		pic_fd = open(pic_name, O_RDONLY);
 
 		if (pic_fd > 0) {
-			/* take care of stride >= act_width */
-			for(i = 0; i < height; i++)
+			/* 
+			 * take care of stride >= act_width
+			 * For a afbc buffer, there maybe gap between header and playlod,
+			 * This means that the payload will be scattered over an area larger
+			 * than the actual linear format buffer.
+			 */
+			for(i = 0; i < virtual_height; i++)
 				read(pic_fd, virtual + i * pitches[0], width * bpp >> 3);
 			if (format == DRM_FORMAT_NV12 || format == DRM_FORMAT_NV21 || format == DRM_FORMAT_NV15) {
-				for(i = 0; i < height / 2; i++)
+				for(i = 0; i < virtual_height / 2; i++)
 					read(pic_fd, virtual + offsets[1] + i * pitches[1], width * bpp >> 3);
 			} else if (format == DRM_FORMAT_NV16 || format == DRM_FORMAT_NV61 || format == DRM_FORMAT_NV20) {
-				for(i = 0; i < height; i++)
+				for(i = 0; i < virtual_height; i++)
 					read(pic_fd, virtual + offsets[1] + i * pitches[1], width * bpp >> 3);
 			} else if (format == DRM_FORMAT_NV24 || format == DRM_FORMAT_NV42 || format == DRM_FORMAT_NV30) {
-				for(i = 0; i < height; i++)
+				for(i = 0; i < virtual_height; i++)
 					read(pic_fd, virtual + offsets[1] + i * pitches[1], (width * bpp >> 3) * 2);
 			}
 		} else {
