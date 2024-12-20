@@ -324,13 +324,74 @@ uint32_t drm_get_bpp(uint32_t fmt)
 {
 	const struct drm_format_info *format = drm_format_info(fmt);
 	switch (format->format) {
-		case DRM_FORMAT_YUV420_8BIT:
-			return 12;
-		case DRM_FORMAT_YUV420_10BIT:
-			return 15;
-		case DRM_FORMAT_VUY101010:
-			return 30;
-		default:
-			return drm_format_info_bpp(format, 0);
+	case DRM_FORMAT_YUV420_8BIT:
+		return 12;
+	case DRM_FORMAT_YUV420_10BIT:
+		return 15;
+	case DRM_FORMAT_VUY101010:
+		return 30;
+	default:
+		return drm_format_info_bpp(format, 0);
 	}
+}
+
+#define AFBC_HEADER_SIZE                16
+#define AFBC_TH_LAYOUT_ALIGNMENT        8
+#define AFBC_HDR_ALIGN                  64
+#define AFBC_SUPERBLOCK_PIXELS          256
+#define AFBC_SUPERBLOCK_ALIGNMENT       128
+#define AFBC_TH_BODY_START_ALIGNMENT    4096
+
+int drm_gem_afbc_min_size(uint32_t fmt, uint32_t width, uint32_t height, uint64_t modifier)
+{
+	uint32_t n_blocks, w_alignment, h_alignment, hdr_alignment;
+	uint32_t block_width = 0, block_height = 0;
+	uint32_t aligned_width = 0, aligned_height = 0;
+	uint32_t afbc_size;
+	/* remove bpp when all users properly encode cpp in drm_format_info */
+	__u32 bpp;
+
+	switch (modifier & AFBC_FORMAT_MOD_BLOCK_SIZE_MASK) {
+	case AFBC_FORMAT_MOD_BLOCK_SIZE_16x16:
+		block_width = 16;
+		block_height = 16;
+		break;
+	case AFBC_FORMAT_MOD_BLOCK_SIZE_32x8:
+		block_width = 32;
+		block_height = 8;
+		break;
+	/* no user exists yet - fall through */
+	case AFBC_FORMAT_MOD_BLOCK_SIZE_64x4:
+	case AFBC_FORMAT_MOD_BLOCK_SIZE_32x8_64x4:
+	default:
+		printf("Invalid AFBC_FORMAT_MOD_BLOCK_SIZE: %ld.\n",
+		       modifier & AFBC_FORMAT_MOD_BLOCK_SIZE_MASK);
+		return 0;
+	}
+
+	/* tiled header afbc */
+	w_alignment = block_width;
+	h_alignment = block_height;
+	hdr_alignment = AFBC_HDR_ALIGN;
+	if (modifier & AFBC_FORMAT_MOD_TILED) {
+		w_alignment *= AFBC_TH_LAYOUT_ALIGNMENT;
+		h_alignment *= AFBC_TH_LAYOUT_ALIGNMENT;
+		hdr_alignment = AFBC_TH_BODY_START_ALIGNMENT;
+	}
+
+	aligned_width = ALIGN(width, w_alignment);
+	aligned_height = ALIGN(height, h_alignment);
+
+	bpp = drm_get_bpp(fmt);
+	if (!bpp) {
+		printf("Invalid AFBC bpp value: %d\n", bpp);
+		return 0;
+	}
+
+	n_blocks = (aligned_width * aligned_height) / AFBC_SUPERBLOCK_PIXELS;
+	afbc_size = ALIGN(n_blocks * AFBC_HEADER_SIZE, hdr_alignment);
+	afbc_size += n_blocks * ALIGN(bpp * AFBC_SUPERBLOCK_PIXELS / 8,
+					       AFBC_SUPERBLOCK_ALIGNMENT);
+
+	return afbc_size;
 }
