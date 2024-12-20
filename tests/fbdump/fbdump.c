@@ -171,7 +171,8 @@ static void dump_planes(struct device *dev)
 {
 	drmModeFB2Ptr fb;
 	__s32 fb_fd;
-	unsigned int fb_size;
+	unsigned int fb_size = 0;
+	unsigned int afbc_size = 0;
 	unsigned int i;
 	void *data;
 	char path[PIC_NAME_MAX_LEN];
@@ -212,6 +213,11 @@ static void dump_planes(struct device *dev)
 		}
 		bpp = drm_get_bpp(fb->pixel_format);
 		fb_size = fb->pitches[0] * fb->height;
+		if (drm_is_afbc(fb->modifier))
+			afbc_size = drm_gem_afbc_min_size(fb->pixel_format, fb->width, fb->height, fb->modifier);
+
+		if (afbc_size > fb_size)
+			fb_size = afbc_size;
 		fb_fd = fb_handle_to_fd(dev->fd, fb->handles[0]);
 		if (fb_fd < 0) {
 			fprintf(stderr, "Failed to get fb fd: %s\n", strerror(errno));
