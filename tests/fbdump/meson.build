@@ -20,7 +20,7 @@
 
 modetest = executable(
   'fbdump_drm',
-  files('fourcc.c', 'fbdump.c'),
+  files('drm_format.c', 'fbdump.c'),
   c_args : [libdrm_c_args, '-Wno-pointer-arith'],
   include_directories : [inc_root, inc_tests, inc_drm],
   dependencies : [dep_threads, dep_cairo],
