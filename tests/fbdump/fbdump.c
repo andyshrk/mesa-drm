@@ -104,6 +104,29 @@ static const char *modifier_to_string(uint64_t modifier)
 	char *vendor_name = drmGetFormatModifierVendor(modifier);
 	memset(mod_string, 0x00, sizeof(mod_string));
 
+	if (drm_is_afbc(modifier)) {
+		if (modifier & AFBC_FORMAT_MOD_BLOCK_SIZE_32x8 && (modifier & AFBC_FORMAT_MOD_YTR) &&
+		    (modifier & AFBC_FORMAT_MOD_SPLIT))
+			snprintf(mod_string, sizeof(mod_string), "%s", "AFBC32x8_YTR_SPLIT)");
+		else if (modifier & AFBC_FORMAT_MOD_BLOCK_SIZE_32x8 && (modifier & AFBC_FORMAT_MOD_YTR))
+			snprintf(mod_string, sizeof(mod_string), "%s", "AFBC32x8_YTR");
+		else if (modifier & AFBC_FORMAT_MOD_BLOCK_SIZE_32x8)
+			snprintf(mod_string, sizeof(mod_string), "%s", "AFBC32x8");
+		else if (modifier & AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 && (modifier & AFBC_FORMAT_MOD_YTR) &&
+			 (modifier & AFBC_FORMAT_MOD_SPLIT))
+			snprintf(mod_string, sizeof(mod_string), "%s", "AFBC16x16_YTR_SPLIT");
+		else if (modifier & AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 && (modifier & AFBC_FORMAT_MOD_YTR))
+			snprintf(mod_string, sizeof(mod_string), "%s", "AFBC16x16_YTR");
+		else if (modifier & AFBC_FORMAT_MOD_BLOCK_SIZE_16x16)
+			snprintf(mod_string, sizeof(mod_string), "%s", "AFBC16x16");
+	}
+
+	if (mod_string[0]) {
+		free(modifier_name);
+		free(vendor_name);
+		return mod_string;
+	}
+
 	if (!modifier_name) {
 		if (vendor_name)
 			snprintf(mod_string, sizeof(mod_string), "%s_%s",
