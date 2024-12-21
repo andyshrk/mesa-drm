@@ -46,7 +46,7 @@
 
 #include "drm_format.h"
 
-#define VERSION "1.1.0"
+#define VERSION "1.2.0"
 #define PIC_NAME_MAX_LEN	256
 
 struct crtc {
@@ -236,8 +236,18 @@ static void dump_planes(struct device *dev)
 		}
 		bpp = drm_get_bpp(fb->pixel_format);
 		fb_size = fb->pitches[0] * fb->height;
-		if (drm_is_afbc(fb->modifier))
+		if (drm_is_afbc(fb->modifier)) {
 			afbc_size = drm_gem_afbc_min_size(fb->pixel_format, fb->width, fb->height, fb->modifier);
+			/*
+			 * The calculation of the size of the afbc buffer is relatively
+			 * complex:
+			 * according to mesa: panfrost_create_kms_dumb_buffer_for_resource
+			 * pan_image_layout_init,
+			 * The calculated size will be larger than what we actually calculate here.
+			 * We will first simply do an upward PAGE alignment to keep the code simpler.
+			 */
+			afbc_size = ALIGN(afbc_size, 4096);
+		}
 
 		if (afbc_size > fb_size)
 			fb_size = afbc_size;
