@@ -66,7 +66,7 @@ static void generate_smpte_rgb888(unsigned int width, unsigned int height,
 {
 	uint8_t* line = planes[0];
 	uint32_t color;
-	int x, y, bar_width, bar_index, shifted_index;
+	unsigned int x, y, bar_width, bar_index, shifted_index;
 
 	// Calculate width for each color bar
 	bar_width = width / 7;
