@@ -1,5 +1,5 @@
 /*
- * DRM based mode setting test program
+ * DRM based fps and drm lease test program
  * Copyright 2008 Tungsten Graphics
  *   Jakob Bornecrantz <jakob@tungstengraphics.com>
  * Copyright 2008 Intel Corporation
@@ -53,7 +53,9 @@
 #include <pthread.h>
 #include <poll.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <sys/time.h>
+#include <sys/un.h>
 #if HAVE_SYS_SELECT_H
 #include <sys/select.h>
 #endif
@@ -70,8 +72,11 @@
 
 #include "buffers.h"
 
-#define MAX_LOOP_FB 	6
-#define REPEAT_FRAME 	10
+#define LEASE_FD_SOCKET_PATH 	"/tmp/.drm_lease_fd_passing-socket"
+#define MAX_LOOP_FB 		6
+#define REPEAT_FRAME 		10
+
+#define MAX_LEASE_OBJS 		16
 
 static drmModeModeInfo user_mode;
 
@@ -116,6 +121,11 @@ struct resources {
 	uint32_t count_planes;
 };
 
+struct drm_lease {
+	uint32_t objects[MAX_LEASE_OBJS];
+	uint32_t nr_objects;
+};
+
 struct device {
 	int fd;
 
@@ -129,9 +139,8 @@ struct device {
 		struct bo *bo;
 	} mode;
 
-	int use_atomic;
 	drmModeAtomicReq *req;
-	int32_t writeback_fence_fd;
+	struct drm_lease *lease;
 };
 
 static inline int64_t U642I64(uint64_t val)
@@ -818,6 +827,7 @@ struct pipe_arg {
 	uint32_t *con_ids;
 	unsigned int num_cons;
 	uint32_t crtc_id;
+	uint32_t plane_id;
 	char mode_str[64];
 	char format_str[8]; /* need to leave room for "_BE" and terminating \0 */
 	float vrefresh;
@@ -1072,11 +1082,7 @@ static bool set_property(struct device *dev, struct property_arg *p)
 
 	p->prop_id = props->props[i];
 
-	if (!dev->use_atomic)
-		ret = drmModeObjectSetProperty(dev->fd, p->obj_id, p->obj_type,
-									   p->prop_id, p->value);
-	else
-		ret = drmModeAtomicAddProperty(dev->req, p->obj_id, p->prop_id, p->value);
+	ret = drmModeAtomicAddProperty(dev->req, p->obj_id, p->prop_id, p->value);
 
 	if (ret < 0)
 		fprintf(stderr, "failed to set %s %i property %s to %" PRIu64 ": %s\n",
@@ -1444,8 +1450,7 @@ static unsigned int drm_set_mode(struct device *dev, struct pipe_arg **pipe_args
 		       pipe->mode->name, mode_vrefresh(pipe->mode));
 		for (j = 0; j < pipe->num_cons; ++j) {
 			printf("%s, ", pipe->cons[j]);
-			if (dev->use_atomic)
-				add_property(dev, pipe->con_ids[j], "CRTC_ID", pipe->crtc_id);
+			add_property(dev, pipe->con_ids[j], "CRTC_ID", pipe->crtc_id);
 		}
 		printf("crtc %d\n", pipe->crtc_id);
 
@@ -1494,6 +1499,64 @@ static void atomic_clear_mode(struct device *dev, struct pipe_arg *pipes, unsign
 }
 
 #define min(a, b)	((a) < (b) ? (a) : (b))
+
+static int parse_lease_object(struct device *dev, struct pipe_arg *pipe, const char *arg)
+{
+	unsigned int i;
+	const char *p;
+	char *endp;
+
+	pipe->vrefresh = 0;
+	pipe->crtc_id = (uint32_t)-1;
+	strcpy(pipe->format_str, "XR24");
+
+	/* Count the number of connectors and allocate them. */
+	pipe->num_cons = 1;
+	for (p = arg; *p && *p != ':' && *p != '@'; ++p) {
+		if (*p == ',')
+			pipe->num_cons++;
+	}
+
+	pipe->con_ids = calloc(pipe->num_cons, sizeof(*pipe->con_ids));
+	pipe->cons = calloc(pipe->num_cons, sizeof(*pipe->cons));
+	if (pipe->con_ids == NULL || pipe->cons == NULL)
+		return -1;
+
+	/* Parse the connectors. */
+	for (i = 0, p = arg; i < pipe->num_cons; ++i, p = endp + 1) {
+		endp = strpbrk(p, ",@:");
+		if (!endp)
+			break;
+
+		pipe->cons[i] = strndup(p, endp - p);
+
+		if (*endp != ',')
+			break;
+	}
+
+	if (i != pipe->num_cons - 1)
+		return -1;
+
+	pipe_resolve_connectors(dev, pipe);
+
+	/* Parse the remaining parameters. */
+	if (!endp)
+		return -1;
+
+	if (*endp == '@') {
+		arg = endp + 1;
+		pipe->crtc_id = strtoul(arg, &endp, 10);
+	}
+
+	if (*endp != '@') {
+		return -1;
+	} else {
+		arg = endp + 1;
+		pipe->plane_id = strtoul(arg, &endp, 10);
+	}
+
+	return 0;
+}
 
 static int parse_connector(struct pipe_arg *pipe, const char *arg)
 {
@@ -1663,6 +1726,180 @@ static int parse_property(struct property_arg *p, const char *arg)
 	return 0;
 }
 
+static int client_socket_recv_fd(int socket)
+{
+	struct msghdr msg = {0};
+	char buf[CMSG_SPACE(sizeof(int))];
+	struct cmsghdr *cmsg;
+	int fd;
+	char dummy[2];
+
+	struct iovec io = {
+		.iov_base = dummy,
+		.iov_len = sizeof(dummy)
+	};
+
+	memset(buf, 0, sizeof(buf));
+
+	msg.msg_iov = &io;
+	msg.msg_iovlen = 1;
+	msg.msg_control = buf;
+	msg.msg_controllen = sizeof(buf);
+
+	if (recvmsg(socket, &msg, 0) < 0) {
+		perror("recvmsg");
+		exit(EXIT_FAILURE);
+	}
+
+	cmsg = CMSG_FIRSTHDR(&msg);
+	if (cmsg == NULL || cmsg->cmsg_type != SCM_RIGHTS) {
+		fprintf(stderr, "No fd received\n");
+		exit(EXIT_FAILURE);
+	}
+
+	memcpy(&fd, CMSG_DATA(cmsg), sizeof(fd));
+
+	return fd;
+}
+
+static int client_socket_get_fd(void)
+{
+	struct sockaddr_un addr;
+	int sock_fd;
+	int received_fd;
+
+	// create UNIX SOCK
+	if ((sock_fd = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
+		perror("socket");
+		exit(EXIT_FAILURE);
+	}
+
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_UNIX;
+	strncpy(addr.sun_path, LEASE_FD_SOCKET_PATH, sizeof(addr.sun_path)-1);
+
+	printf("Receiver connecting to sender...\n");
+	if (connect(sock_fd, (struct sockaddr*)&addr, sizeof(addr)) == -1) {
+		perror("connect");
+		exit(EXIT_FAILURE);
+	}
+
+	received_fd = client_socket_recv_fd(sock_fd);
+	printf("Receiver got fd: %d\n", received_fd);
+
+	close(sock_fd);
+	return received_fd;
+}
+
+static void server_socket_send_fd(int socket, int fd)
+{
+	struct msghdr msg = {0};
+	char buf[CMSG_SPACE(sizeof(fd))];
+	struct cmsghdr *cmsg;
+
+	struct iovec io = {
+		.iov_base = (void *)"FD",  // 可选的辅助数据
+		.iov_len = 2
+	};
+
+	memset(buf, 0, sizeof(buf));
+
+	msg.msg_iov = &io;
+	msg.msg_iovlen = 1;
+	msg.msg_control = buf;
+	msg.msg_controllen = sizeof(buf);
+
+	cmsg = CMSG_FIRSTHDR(&msg);
+	cmsg->cmsg_level = SOL_SOCKET;
+	cmsg->cmsg_type = SCM_RIGHTS;
+	cmsg->cmsg_len = CMSG_LEN(sizeof(fd));
+
+	memcpy(CMSG_DATA(cmsg), &fd, sizeof(fd));
+	msg.msg_controllen = cmsg->cmsg_len;
+
+	if (sendmsg(socket, &msg, 0) < 0) {
+		perror("sendmsg");
+		exit(EXIT_FAILURE);
+	}
+}
+
+static void *init_lease_server_socket(void *data)
+{
+	struct device *dev = (struct device *)data;
+	struct drm_lease *lease = dev->lease;
+	int sock_fd, client_fd, leased_fd;
+	struct sockaddr_un addr;
+	const uint32_t *lease_objects = lease->objects;
+	uint32_t lessee_id;
+
+	// create UNX SOCK
+	if ((sock_fd = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
+		perror("socket");
+		exit(EXIT_FAILURE);
+	}
+
+	// bind to a file path
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_UNIX;
+	strncpy(addr.sun_path, LEASE_FD_SOCKET_PATH, sizeof(addr.sun_path)-1);
+
+	unlink(LEASE_FD_SOCKET_PATH);  // 确保路径未被占用
+
+	if (bind(sock_fd, (struct sockaddr*)&addr, sizeof(addr)) == -1) {
+		perror("bind");
+		exit(EXIT_FAILURE);
+	}
+
+	if (listen(sock_fd, 1) == -1) {
+		perror("listen");
+		exit(EXIT_FAILURE);
+	}
+
+	/*
+	 * we create a lease with the connector_id@crtc_id@plane_id.
+	 * The lessee will initialize drm using these values.
+	 */
+	leased_fd = drmModeCreateLease(dev->fd, lease_objects, lease->nr_objects, 0, &lessee_id);
+	if (leased_fd < 0) {
+		fprintf(stderr, "Failed to create lease\n");
+		exit(EXIT_FAILURE);
+	}
+
+	printf("Sender waiting for receiver to connect...\n");
+	client_fd = accept(sock_fd, NULL, NULL);
+	if (client_fd == -1) {
+		perror("accept");
+		exit(EXIT_FAILURE);
+	}
+
+	printf("Sender get connected,sending fd :%d\n", leased_fd);
+
+	server_socket_send_fd(client_fd, leased_fd);
+
+	close(leased_fd);
+	close(client_fd);
+	close(sock_fd);
+	unlink(LEASE_FD_SOCKET_PATH);
+
+	return 0;
+}
+
+static void drm_create_lease_server_thread(struct device *dev)
+{
+	pthread_t server_thread;
+	struct sched_param param;
+	int policy;
+	int ret;
+
+	ret = pthread_create(&server_thread, NULL, init_lease_server_socket, (void *)dev);
+	if (ret < 0)
+		fprintf(stderr,"%s couldn't create vsync thread\n", __func__);
+
+	pthread_getschedparam(server_thread, &policy, &param);
+	param.sched_priority = sched_get_priority_max(SCHED_FIFO) ;
+	pthread_setschedparam(server_thread, SCHED_FIFO, &param);
+}
+
 static void usage(char *name)
 {
 	fprintf(stderr, "usage: %s [-acDdefMoPpsCvrw]\n", name);
@@ -1675,6 +1912,7 @@ static void usage(char *name)
 	fprintf(stderr, "\t-p\tlist CRTCs and planes (pipes)\n");
 
 	fprintf(stderr, "\n Test options:\n\n");
+	fprintf(stderr, "\t-P <plane_id>@<crtc_id>:<w>x<h>[:<crtc_w>x<crtc_h>][+<x>+<y>][*<scale>][@<format>][#colorkey]\tset a plane, see 'plane-topology'\n");
 	fprintf(stderr, "\t-s <connector_id>[,<connector_id>][@<crtc_id>]:mode[@<format>]\tset a mode, see 'mode-topology'\n");
 	fprintf(stderr, "\t\twhere mode can be specified as:\n");
 	fprintf(stderr, "\t\t<hdisp>x<vdisp>[-<vrefresh>]\n");
@@ -1683,14 +1921,13 @@ static void usage(char *name)
 	fprintf(stderr, "\t-v\ttest vsynced page flipping\n");
 	fprintf(stderr, "\t-r\tset the preferred mode for all connectors\n");
 	fprintf(stderr, "\t-w <obj_id>:<prop_name>:<value>\tset property, see 'property'\n");
-	fprintf(stderr, "\t-a \tuse atomic API\n");
-	fprintf(stderr, "\t-F pattern1,pattern2\tspecify fill patterns\n");
-	fprintf(stderr, "\t-o <desired file path> \t Dump writeback output buffer to file\n");
 
 	fprintf(stderr, "\n Generic options:\n\n");
 	fprintf(stderr, "\t-d\tdrop master after mode set\n");
 	fprintf(stderr, "\t-M module\tuse the given driver\n");
 	fprintf(stderr, "\t-D device\tuse the given device\n");
+	fprintf(stderr, "\t-L [<connector_id>][@<crtc_id>][@<plane_id>]\t Objects to be leased, run in drm lessor mode\n");
+	fprintf(stderr, "\t-l \tRun in drm lessee mode\n");
 
 	fprintf(stderr, "\n\tDefault is to dump all info.\n");
 
@@ -1715,29 +1952,35 @@ static void usage(char *name)
 	exit(0);
 }
 
-static char optstr[] = "acdD:efF:M:P:ps:Cvrw:o:l";
+static char optstr[] = "acdD:efF:M:P:ps:Cvrw:o:L:l";
 
 int main(int argc, char **argv)
 {
 	struct device dev;
+	struct drm_lease lease;
 	int encoders = 0, connectors = 0, crtcs = 0, planes = 0, framebuffers = 0;
 	int drop_master = 0;
 	int test_vsync = 0;
+	int lessor_mode = 0;
+	int lessee_mode = 0;
 	int set_preferred = 0;
-	int use_atomic = 1;
 	int c;
 	char *device = NULL;
 	char *module = NULL;
 	unsigned int i;
 	unsigned int count = 0, plane_count = 0;
+	unsigned int lease_count = 0;
 	unsigned int prop_count = 0;
 	struct pipe_arg *pipe_args = NULL;
+	struct pipe_arg *lease_pipe_args = NULL;
 	struct plane_arg *plane_args = NULL;
 	struct property_arg *prop_args = NULL;
+	drmModeObjectListPtr ol;
 	unsigned int args = 0;
 	int ret;
 
 	memset(&dev, 0, sizeof dev);
+	memset(&lease, 0, sizeof lease);
 
 	opterr = 0;
 	while ((c = getopt(argc, argv, optstr)) != -1) {
@@ -1824,7 +2067,22 @@ int main(int argc, char **argv)
 
 			prop_count++;
 			break;
+		case 'L':
+			lease_pipe_args = realloc(lease_pipe_args, (lease_count + 1) * sizeof *pipe_args);
+			if (lease_pipe_args == NULL) {
+				fprintf(stderr, "memory allocation failed\n");
+				return 1;
+			}
+			memset(&lease_pipe_args[lease_count], 0, sizeof(*lease_pipe_args));
+
+			if (parse_lease_object(&dev, &lease_pipe_args[lease_count], optarg) < 0)
+				usage(argv[0]);
+
+			lease_count++;
+			lessor_mode = 1;
+			break;
 		case 'l':
+			lessee_mode = 1;
 			break;
 		default:
 			usage(argv[0]);
@@ -1836,35 +2094,74 @@ int main(int argc, char **argv)
 	if (!args)
 		encoders = connectors = crtcs = planes = framebuffers = 1;
 
+	if (lessor_mode && lessee_mode) {
+		fprintf(stderr, "Can only run in lessor or lessee mode.\n");
+		return -1;
+	}
+
 	if (test_vsync && !count && !set_preferred) {
 		fprintf(stderr, "page flipping requires at least one -s or -r option.\n");
 		return -1;
 	}
+
 	if (set_preferred && count) {
 		fprintf(stderr, "cannot use -r (preferred) when -s (mode) is set\n");
 		return -1;
 	}
 
-	dev.fd = util_open(device, module);
-	if (dev.fd < 0)
-		return -1;
+	/*
+	 * lessee should not open /dev/dri/card directly
+	 */
+	if (!lessee_mode) {
+		dev.fd = util_open(device, module);
+		if (dev.fd < 0)
+			return -1;
 
-	if (use_atomic) {
 		ret = drmSetClientCap(dev.fd, DRM_CLIENT_CAP_ATOMIC, 1);
-		drmSetClientCap(dev.fd, DRM_CLIENT_CAP_WRITEBACK_CONNECTORS, 1);
 		if (ret) {
 			fprintf(stderr, "no atomic modesetting support: %s\n", strerror(errno));
 			drmClose(dev.fd);
 			return -1;
 		}
+
+
+		dev.resources = get_resources(&dev);
+		if (!dev.resources) {
+			drmClose(dev.fd);
+			return 1;
+		}
 	}
 
-	dev.use_atomic = use_atomic;
+	if (lessor_mode) {
+		struct pipe_arg *pipe = &lease_pipe_args[0];
 
-	dev.resources = get_resources(&dev);
-	if (!dev.resources) {
-		drmClose(dev.fd);
-		return 1;
+		if (pipe->con_ids[0])
+			lease.objects[lease.nr_objects++] = pipe->con_ids[0];
+
+		if (lease_pipe_args->crtc_id)
+			lease.objects[lease.nr_objects++] = pipe->crtc_id;
+
+		if (pipe->plane_id)
+			lease.objects[lease.nr_objects++] = pipe->plane_id;
+
+		printf("lease crtc %d plane: %d connecter %d \n", pipe->crtc_id, pipe->plane_id, pipe->con_ids[0]);
+		dev.lease = &lease;
+		drm_create_lease_server_thread(&dev);
+	}
+
+	if (lessee_mode) {
+		dev.fd = client_socket_get_fd();
+		ol = drmModeGetLease(dev.fd);
+		printf("leased objects %d  %d %d \n", ol->objects[0], ol->objects[1], ol->objects[2]);
+		ret = drmSetClientCap(dev.fd, DRM_CLIENT_CAP_ATOMIC, 1);
+
+		/* Dump all the resources for lessee. */
+		encoders = connectors = crtcs = planes = framebuffers = 1;
+		dev.resources = get_resources(&dev);
+		if (!dev.resources) {
+			drmClose(dev.fd);
+			return 1;
+		}
 	}
 
 #define dump_resource(dev, res) if (res) dump_##res(dev)
@@ -1875,61 +2172,58 @@ int main(int argc, char **argv)
 	dump_resource(&dev, planes);
 	dump_resource(&dev, framebuffers);
 
-	if (dev.use_atomic)
-		dev.req = drmModeAtomicAlloc();
+	dev.req = drmModeAtomicAlloc();
 
 	for (i = 0; i < prop_count; ++i)
 		set_property(&dev, &prop_args[i]);
 
-	if (dev.use_atomic) {
-		if (set_preferred || (count && plane_count)) {
-			uint64_t cap = 0;
+	if (set_preferred || (count && plane_count)) {
+		uint64_t cap = 0;
 
-			ret = drmGetCap(dev.fd, DRM_CAP_DUMB_BUFFER, &cap);
-			if (ret || cap == 0) {
-				fprintf(stderr, "driver doesn't support the dumb buffer API\n");
-				return 1;
-			}
-
-			if (set_preferred || count)
-				count = drm_set_mode(&dev, &pipe_args, count);
-
-			if (plane_count)
-				drm_atomic_set_planes(&dev, plane_args, plane_count, false, 0);
-
-			ret = drmModeAtomicCommit(dev.fd, dev.req, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
-			if (ret) {
-				fprintf(stderr, "Atomic Commit failed [1]\n");
-				return 1;
-			}
-
-			drm_atomic_commit_loop(&dev, pipe_args, plane_args, plane_count);
-
-			if (drop_master)
-				drmDropMaster(dev.fd);
-
-			getchar();
-
-			drmModeAtomicFree(dev.req);
-			dev.req = drmModeAtomicAlloc();
-
-			/* XXX: properly teardown the preferred mode/plane state */
-			if (plane_count)
-				atomic_clear_planes(&dev, plane_args, plane_count);
-
-			if (count)
-				atomic_clear_mode(&dev, pipe_args, count);
+		ret = drmGetCap(dev.fd, DRM_CAP_DUMB_BUFFER, &cap);
+		if (ret || cap == 0) {
+			fprintf(stderr, "driver doesn't support the dumb buffer API\n");
+			return 1;
 		}
 
-		ret = drmModeAtomicCommit(dev.fd, dev.req, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
-		if (ret)
-			fprintf(stderr, "Atomic Commit failed\n");
+		if (set_preferred || count)
+			count = drm_set_mode(&dev, &pipe_args, count);
 
-		if (count && plane_count)
-			atomic_clear_FB(&dev, plane_args, plane_count);
+		if (plane_count)
+			drm_atomic_set_planes(&dev, plane_args, plane_count, false, 0);
+
+		ret = drmModeAtomicCommit(dev.fd, dev.req, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
+		if (ret) {
+			fprintf(stderr, "Atomic Commit failed [1]\n");
+			return 1;
+		}
+
+		drm_atomic_commit_loop(&dev, pipe_args, plane_args, plane_count);
+
+		if (drop_master)
+			drmDropMaster(dev.fd);
+
+		getchar();
 
 		drmModeAtomicFree(dev.req);
+		dev.req = drmModeAtomicAlloc();
+
+		/* XXX: properly teardown the preferred mode/plane state */
+		if (plane_count)
+			atomic_clear_planes(&dev, plane_args, plane_count);
+
+		if (count)
+			atomic_clear_mode(&dev, pipe_args, count);
 	}
+
+	ret = drmModeAtomicCommit(dev.fd, dev.req, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
+	if (ret)
+		fprintf(stderr, "Atomic Commit failed\n");
+
+	if (count && plane_count)
+		atomic_clear_FB(&dev, plane_args, plane_count);
+
+	drmModeAtomicFree(dev.req);
 
 	free_resources(dev.resources);
 	drmClose(dev.fd);
