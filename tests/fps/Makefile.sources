@@ -1,0 +1,4 @@
+MODETEST_FILES := \
+	buffers.c \
+	buffers.h \
+	drm_fps.c
