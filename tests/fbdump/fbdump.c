@@ -105,20 +105,27 @@ static const char *modifier_to_string(uint64_t modifier)
 	memset(mod_string, 0x00, sizeof(mod_string));
 
 	if (drm_is_afbc(modifier)) {
-		if (modifier & AFBC_FORMAT_MOD_BLOCK_SIZE_32x8 && (modifier & AFBC_FORMAT_MOD_YTR) &&
-		    (modifier & AFBC_FORMAT_MOD_SPLIT))
-			snprintf(mod_string, sizeof(mod_string), "%s", "AFBC32x8_YTR_SPLIT)");
-		else if (modifier & AFBC_FORMAT_MOD_BLOCK_SIZE_32x8 && (modifier & AFBC_FORMAT_MOD_YTR))
-			snprintf(mod_string, sizeof(mod_string), "%s", "AFBC32x8_YTR");
-		else if (modifier & AFBC_FORMAT_MOD_BLOCK_SIZE_32x8)
-			snprintf(mod_string, sizeof(mod_string), "%s", "AFBC32x8");
-		else if (modifier & AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 && (modifier & AFBC_FORMAT_MOD_YTR) &&
-			 (modifier & AFBC_FORMAT_MOD_SPLIT))
-			snprintf(mod_string, sizeof(mod_string), "%s", "AFBC16x16_YTR_SPLIT");
-		else if (modifier & AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 && (modifier & AFBC_FORMAT_MOD_YTR))
-			snprintf(mod_string, sizeof(mod_string), "%s", "AFBC16x16_YTR");
-		else if (modifier & AFBC_FORMAT_MOD_BLOCK_SIZE_16x16)
-			snprintf(mod_string, sizeof(mod_string), "%s", "AFBC16x16");
+		char block[16] = {0};
+		char features[64] = {0};
+
+		if (modifier & AFBC_FORMAT_MOD_BLOCK_SIZE_32x8) {
+			strcpy(block, "32x8");
+		} else if (modifier & AFBC_FORMAT_MOD_BLOCK_SIZE_16x16) {
+			strcpy(block, "16x16");
+		} else {
+			strcpy(block, "UNK"); // unknow block size
+		}
+
+		if (modifier & AFBC_FORMAT_MOD_YTR)
+			strcat(features, "_YTR");
+
+		if (modifier & AFBC_FORMAT_MOD_SPLIT)
+			strcat(features, "_SPLIT");
+
+		if (modifier & AFBC_FORMAT_MOD_SPARSE)
+			strcat(features, "_SPARSE");
+
+		snprintf(mod_string, sizeof(mod_string), "AFBC%s%s", block, features);
 	}
 
 	if (mod_string[0]) {
@@ -271,6 +278,7 @@ static void dump_planes(struct device *dev)
 			dir = dev->dir;
 		else
 			dir = cwd;
+
 		if (fb->modifier) {
 			snprintf(path, sizeof(path), "%s/plane-%d-%dx%d-%s-%s.bin",
 				 dir, ovr->plane_id, (fb->pitches[0] << 3) / bpp,
