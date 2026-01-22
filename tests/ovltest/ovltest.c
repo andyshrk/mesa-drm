@@ -823,6 +823,8 @@ struct plane_arg {
 	bool has_position;
 	bool afbc_en;
 	bool afbc_ytr_en;
+	bool afbc_split_en;
+	bool afbc_sparse_en;
 	bool tiled_en;
 	uint32_t block_w;
 	int32_t rotation;
@@ -1172,6 +1174,12 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p, const char 
 				modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC(1);
 			else if (p->tiled_en)
 				modifiers[0] = DRM_FORMAT_MOD_ROCKCHIP_TILED(1);
+
+			if (modifiers[0] && p->afbc_split_en)
+				modifiers[0] |= AFBC_FORMAT_MOD_SPLIT;
+
+			if (modifiers[0] && p->afbc_sparse_en)
+				modifiers[0] |= AFBC_FORMAT_MOD_SPARSE;
 
 			if (get_plane_num(p->fourcc) == 2)
 				modifiers[1] = modifiers[0];
@@ -1698,7 +1706,16 @@ static int parse_plane(struct plane_arg *plane, const char *p)
 		if (strstr(end + 5, "@afbc32x8")) {
 			plane->afbc_en = true;
 			plane->block_w = 32;
-		} else if (strstr(end + 5, "@afbcytr")) {
+		} else if(strstr(end + 5, "afbcsplitsparse")) {
+			plane->afbc_en = true;
+			plane->block_w = 16;
+			plane->afbc_split_en = true;
+			plane->afbc_sparse_en = true;
+		} else if(strstr(end + 5, "afbcsplit")) {
+			plane->afbc_en = true;
+			plane->block_w = 16;
+			plane->afbc_split_en = true;
+		}else if (strstr(end + 5, "@afbcytr")) {
 			plane->afbc_en = true;
 			plane->afbc_ytr_en = true;
 			plane->block_w = 16;
