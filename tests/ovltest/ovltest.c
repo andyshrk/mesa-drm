@@ -1209,6 +1209,13 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p, const char 
 		crtc_w = p->crtc_w ? p->crtc_w : p->w * p->scale;
 		crtc_h = p->crtc_h ? p->crtc_h : p->h * p->scale;
 	}
+
+	if (crtc_w > crtc->mode->hdisplay)
+		crtc_w = crtc->mode->hdisplay;
+
+	if (crtc_h > crtc->mode->vdisplay)
+		crtc_h = crtc->mode->vdisplay;
+
 	if (!p->has_position) {
 		/* Default to the middle of the screen */
 		crtc_x = (crtc->mode->hdisplay - crtc_w) / 2;
