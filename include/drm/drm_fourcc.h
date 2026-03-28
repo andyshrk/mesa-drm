@@ -1758,9 +1758,10 @@ drm_fourcc_canonicalize_nvidia_format_mod(__u64 modifier)
 #define AMD_FMT_MOD_CLEAR(field) \
 	(~((__u64)AMD_FMT_MOD_##field##_MASK << AMD_FMT_MOD_##field##_SHIFT))
 
-#define ROCKCHIP_TILED_BLOCK_SIZE_MASK      0xf
-#define ROCKCHIP_TILED_BLOCK_SIZE_8x8   (1ULL)
-#define ROCKCHIP_TILED_BLOCK_SIZE_4x4   (2ULL)
+#define ROCKCHIP_TILED_BLOCK_SIZE_MASK      	0xf
+#define ROCKCHIP_TILED_BLOCK_SIZE_8x8   	(1ULL)
+#define ROCKCHIP_TILED_BLOCK_SIZE_4x4_MODE0     (2ULL)
+#define ROCKCHIP_TILED_BLOCK_SIZE_4x4_MODE1     (3ULL)
 
 #define DRM_FORMAT_MOD_ROCKCHIP_TILED(_mode) fourcc_mod_code(ROCKCHIP, _mode)
 

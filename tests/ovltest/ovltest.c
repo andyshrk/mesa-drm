@@ -826,6 +826,7 @@ struct plane_arg {
 	bool afbc_split_en;
 	bool afbc_sparse_en;
 	bool tiled_en;
+	uint32_t tile_mode;  /* 0=8x8, 2=4x4_MODE0, 3=4x4_MODE1 */
 	uint32_t block_w;
 	int32_t rotation;
 	int32_t x, y;
@@ -846,6 +847,72 @@ struct error_event {
 	struct device *dev;
 	pthread_t monitor_thread;
 };
+
+static drmModeModeInfo user_mode;
+
+static int create_custom_mode(drmModeModeInfo *mode, const char *mode_str,
+	const float vrefresh)
+{
+	uint32_t hdisplay, vdisplay;
+	uint32_t hblank, vblank;
+	uint32_t hfront_porch, hsync;
+	uint32_t vfront_porch, vsync;
+	float refresh;
+
+	/* Parse resolution string like "3840x2160" */
+	if (sscanf(mode_str, "%u x %u", &hdisplay, &vdisplay) != 2) {
+		if (sscanf(mode_str, "%ux%u", &hdisplay, &vdisplay) != 2)
+			return -EINVAL;
+	}
+
+	/* Calculate blanking values based on typical timing parameters */
+	hblank = hdisplay * 5 / 100; /* 5% horizontal blanking */
+	if (hblank < 88)
+		hblank = 88; /* Minimum H-blank */
+	if (hblank > 200)
+		hblank = 200; /* Maximum H-blank */
+
+	vblank = vdisplay * 5 / 100; /* 5% vertical blanking */
+	if (vblank < 6)
+		vblank = 6; /* Minimum V-blank */
+	if (vblank > 30)
+		vblank = 30; /* Maximum V-blank */
+
+	/* H-sync timings: front porch = hblank/4, sync = hblank/2 */
+	hfront_porch = hblank / 4;
+	hsync = hblank / 2;
+
+	/* V-sync timings: front porch = vblank/4, sync = vblank/2 */
+	vfront_porch = vblank / 4;
+	vsync = vblank / 2;
+
+	/* Fill mode structure */
+	memset(mode, 0, sizeof(*mode));
+
+	mode->hdisplay = hdisplay;
+	mode->hsync_start = hdisplay + hfront_porch;
+	mode->hsync_end = hdisplay + hfront_porch + hsync;
+	mode->htotal = hdisplay + hblank;
+
+	mode->vdisplay = vdisplay;
+	mode->vsync_start = vdisplay + vfront_porch;
+	mode->vsync_end = vdisplay + vfront_porch + vsync;
+	mode->vtotal = vdisplay + vblank;
+
+	/* Calculate clock for specified refresh rate (default 60Hz if not specified) */
+	refresh = (vrefresh > 0) ? vrefresh : 60.0f;
+	mode->clock = (uint32_t)roundf(mode->htotal * mode->vtotal * refresh / 1000.0f);
+	mode->vrefresh = (uint16_t)roundf(refresh);
+
+	/* Set mode name */
+	snprintf(mode->name, sizeof(mode->name), "%dx%d@%.0f", hdisplay, vdisplay, refresh);
+
+	/* Set standard mode flags */
+	mode->flags = DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC;
+	mode->type = DRM_MODE_TYPE_USERDEF;
+
+	return 0;
+}
 
 static drmModeModeInfo *
 connector_find_mode(struct device *dev, uint32_t con_id, const char *mode_str,
@@ -968,16 +1035,17 @@ static int pipe_find_crtc_and_mode(struct device *dev, struct pipe_arg *pipe)
 		mode = connector_find_mode(dev, pipe->con_ids[i],
 					   pipe->mode_str, pipe->vrefresh);
 		if (mode == NULL) {
-			if (pipe->vrefresh)
-				fprintf(stderr,
-				"failed to find mode "
-				"\"%s-%.2fHz\" for connector %s\n",
-				pipe->mode_str, pipe->vrefresh, pipe->cons[i]);
-			else
-				fprintf(stderr,
-				"failed to find mode \"%s\" for connector %s\n",
+			fprintf(stderr,
+				"failed to find mode \"%s\" for connector %s, using custom mode\n",
 				pipe->mode_str, pipe->cons[i]);
-			return -EINVAL;
+
+			if (create_custom_mode(&user_mode, pipe->mode_str, pipe->vrefresh) < 0) {
+				fprintf(stderr,
+					"failed to create custom mode from \"%s\"\n",
+					pipe->mode_str);
+				return -EINVAL;
+			}
+			mode = &user_mode;
 		}
 	}
 
@@ -1172,8 +1240,12 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p, const char 
 				modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC( 1 | AFBC_FORMAT_MOD_YTR);
 			else if (p->afbc_en && p->block_w == 16)
 				modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC(1);
-			else if (p->tiled_en)
-				modifiers[0] = DRM_FORMAT_MOD_ROCKCHIP_TILED(1);
+			else if (p->tiled_en) {
+				if (p->tile_mode == 2)
+					modifiers[0] = DRM_FORMAT_MOD_ROCKCHIP_TILED(ROCKCHIP_TILED_BLOCK_SIZE_4x4_MODE0);
+				else
+					modifiers[0] = DRM_FORMAT_MOD_ROCKCHIP_TILED(1);
+			}
 
 			if (modifiers[0] && p->afbc_split_en)
 				modifiers[0] |= AFBC_FORMAT_MOD_SPLIT;
@@ -1241,19 +1313,25 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p, const char 
 	return 0;
 }
 
-static void atomic_set_planes(struct device *dev, struct plane_arg *p,
+static int atomic_set_planes(struct device *dev, struct plane_arg *p,
 			      unsigned int count, bool update)
 {
 	unsigned int i;
+	int ret;
 
 	/* set up planes */
 	if (count > pic_cnt)
 		fprintf(stderr, "no enough picture data for %d planes\n", count);
 
 	for (i = 0; i < count; i++) {
-		if (atomic_set_plane(dev, &p[i], pic_name[i], update))
-			return;
+		ret = atomic_set_plane(dev, &p[i], pic_name[i], update);
+		if (ret < 0) {
+			fprintf(stderr, "failed to set plane %d\n", i);
+			return ret;
+		}
 	}
+
+	return 0;
 }
 
 static void atomic_clear_planes(struct device *dev, struct plane_arg *p, unsigned int count)
@@ -1492,18 +1570,27 @@ static void drm_create_error_monitor_thread(struct device *dev)
 	pthread_setschedparam(evt->monitor_thread, SCHED_FIFO, &param);
 }
 
-static void atomic_set_mode(struct device *dev, struct pipe_arg *pipes, unsigned int count)
+static int atomic_set_mode(struct device *dev, struct pipe_arg *pipes, unsigned int count)
 {
 	unsigned int i;
 	unsigned int j;
 	int ret;
+	int failed_pipes = 0;
 
 	for (i = 0; i < count; i++) {
 		struct pipe_arg *pipe = &pipes[i];
 
 		ret = pipe_find_crtc_and_mode(dev, pipe);
-		if (ret < 0)
+		if (ret < 0) {
+			fprintf(stderr, "failed to find CRTC and mode for pipe %d\n", i);
+			failed_pipes++;
 			continue;
+		}
+	}
+
+	if ((unsigned int)failed_pipes == count) {
+		fprintf(stderr, "all pipes failed to find CRTC and mode\n");
+		return -1;
 	}
 
 	for (i = 0; i < count; i++) {
@@ -1525,7 +1612,11 @@ static void atomic_set_mode(struct device *dev, struct pipe_arg *pipes, unsigned
 		}
 		printf("crtc %d\n", pipe->crtc->crtc->crtc_id);
 		if (pipe->wbc) {
-			atomic_add_wbc_fb(dev, pipe);
+			ret = atomic_add_wbc_fb(dev, pipe);
+			if (ret < 0) {
+				fprintf(stderr, "failed to add writeback fb\n");
+				return -1;
+			}
 			printf("write back %d x %d to fb_id :%d\n",
 			       pipe->mode->hdisplay, pipe->mode->vdisplay, pipe->fb_id);
 			add_property(dev, pipe->con_ids[0], "WRITEBACK_FB_ID", pipe->fb_id);
@@ -1535,6 +1626,8 @@ static void atomic_set_mode(struct device *dev, struct pipe_arg *pipes, unsigned
 			add_property(dev, pipe->crtc->crtc->crtc_id, "ACTIVE", 1);
 		}
 	}
+
+	return 0;
 }
 
 static void atomic_clear_mode(struct device *dev, struct pipe_arg *pipes, unsigned int count)
@@ -1597,7 +1690,6 @@ static int parse_connector(struct pipe_arg *pipe, const char *arg)
 			break;
 
 		pipe->cons[i] = strndup(p, endp - p);
-
 		if (*endp != ',')
 			break;
 	}
@@ -1729,8 +1821,16 @@ static int parse_plane(struct plane_arg *plane, const char *p)
 		} else if (strstr(end + 5, "@afbc")) {
 			plane->afbc_en = true;
 			plane->block_w = 16;
+			plane->tile_mode = 0;
+		} else if (strstr(end + 5, "@tile4x4m0")) {
+			plane->tiled_en = true;
+			plane->tile_mode = 2;  /* 4x4_MODE0 */
+		} else if (strstr(end + 5, "@tile4x4m1")) {
+			plane->tiled_en = true;
+			plane->tile_mode = 3;  /* 4x4_MODE1 */
 		} else if (strstr(end + 5, "@tile")) {
 			plane->tiled_en = true;
+			plane->tile_mode = 1;  /* 8x8 by default */
 		}
 
 	} else {
@@ -1798,7 +1898,7 @@ static void usage(char *name)
 
 
 	fprintf(stderr, "\n Test options:\n\n");
-	fprintf(stderr, "\t-P <plane_id>@<crtc_id>:<w>x<h>[:<crtc_w>x<crtc_h>][@stride:vir_w][+<x>+<y>][*<scale>][@<format>][@afbc][@afbc32x8][@afbcytr][@rotatex/y/90/270]\tset a plane\n");
+	fprintf(stderr, "\t-P <plane_id>@<crtc_id>:<w>x<h>[:<crtc_w>x<crtc_h>][@stride:vir_w][+<x>+<y>][*<scale>][@<format>][@afbc][@afbc32x8][@afbcytr][@tile][@tile4x4][@rotatex/y/90/270]\tset a plane\n");
 	fprintf(stderr, "\t-s <connector_id>[,<connector_id>][@<crtc_id>]:[#<mode index>]<mode>[-<vrefresh>][@<format>]\tset a mode\n");
 	fprintf(stderr, "\t-C\ttest hw cursor\n");
 	fprintf(stderr, "\t-v\ttest vsynced page flipping\n");
@@ -1872,6 +1972,7 @@ int main(int argc, char **argv)
 	bool error_monitor = false;
 	drmVersionPtr version;
 	int ret;
+	int exit_code = 0;
 
 	memset(&dev, 0, sizeof dev);
 
@@ -1975,8 +2076,10 @@ int main(int argc, char **argv)
 		encoders = connectors = crtcs = planes = framebuffers = 1;
 
 	dev.fd = util_open(device, module);
-	if (dev.fd < 0)
-		return -1;
+	if (dev.fd < 0) {
+		exit_code = -1;
+		goto cleanup;
+	}
 
 	version = drmGetVersion(dev.fd);
 	if(version) {
@@ -1992,28 +2095,28 @@ int main(int argc, char **argv)
 	ret = drmSetClientCap(dev.fd, DRM_CLIENT_CAP_ATOMIC, 1);
 	if (ret && use_atomic) {
 		fprintf(stderr, "no atomic modesetting support: %s\n", strerror(errno));
-		drmClose(dev.fd);
-		return -1;
+		exit_code = -1;
+		goto cleanup;
 	}
 
 	dev.use_atomic = 1;
 
 	if (test_vsync && !count) {
 		fprintf(stderr, "page flipping requires at least one -s option.\n");
-		return -1;
+		exit_code = -1;
+		goto cleanup;
 	}
 
 	dev.resources = get_resources(&dev);
 	if (!dev.resources) {
-		drmClose(dev.fd);
-		return 1;
+		exit_code = 1;
+		goto cleanup;
 	}
 
 	for (i = 0; i < count; i++) {
 		if (pipe_resolve_connectors(&dev, &pipe_args[i]) < 0) {
-			free_resources(dev.resources);
-			drmClose(dev.fd);
-			return 1;
+			exit_code = 1;
+			goto cleanup;
 		}
 	}
 
@@ -2047,16 +2150,29 @@ int main(int argc, char **argv)
 		ret = drmGetCap(dev.fd, DRM_CAP_DUMB_BUFFER, &cap);
 		if (ret || cap == 0) {
 			fprintf(stderr, "driver doesn't support the dumb buffer API\n");
-			return 1;
+			exit_code = 1;
+			goto cleanup;
 		}
 
-		atomic_set_mode(&dev, pipe_args, count);
-		atomic_set_planes(&dev, plane_args, plane_count, false);
+		ret = atomic_set_mode(&dev, pipe_args, count);
+		if (ret) {
+			fprintf(stderr, "atomic_set_mode failed\n");
+			exit_code = 1;
+			goto cleanup;
+		}
+
+		ret = atomic_set_planes(&dev, plane_args, plane_count, false);
+		if (ret) {
+			fprintf(stderr, "atomic_set_planes failed\n");
+			exit_code = 1;
+			goto cleanup;
+		}
 
 		ret = drmModeAtomicCommit(dev.fd, dev.req, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
 		if (ret) {
 			fprintf(stderr, "Atomic Commit failed [1]\n");
-			return 1;
+			exit_code = 1;
+			goto cleanup;
 		}
 
 		gettimeofday(&pipe_args->start, NULL);
@@ -2067,7 +2183,8 @@ int main(int argc, char **argv)
 			c_plane_args = calloc(1, plane_count * sizeof(*c_plane_args));
 			if (c_plane_args == NULL) {
 				fprintf(stderr, "memory allocation for commit plane args failed\n");
-				return 1;
+				exit_code = 1;
+				goto cleanup;
 			}
 			c_plane_count = 1;
 			c_increase_mode = true;
@@ -2078,15 +2195,26 @@ int main(int argc, char **argv)
 			dev.req = drmModeAtomicAlloc();
 			if (dynamic_onoff) {
 				memcpy(c_plane_args, plane_args, sizeof(*c_plane_args));
-				atomic_set_planes(&dev, plane_args, c_plane_count, true);
+				ret = atomic_set_planes(&dev, plane_args, c_plane_count, true);
+				if (ret) {
+					fprintf(stderr, "atomic_set_planes failed in vsync loop\n");
+					exit_code = 1;
+					goto cleanup;
+				}
 				atomic_clear_planes(&dev, &plane_args[c_plane_count], plane_count - c_plane_count);
 			} else {
-				atomic_set_planes(&dev, plane_args, plane_count, true);
+				ret = atomic_set_planes(&dev, plane_args, plane_count, true);
+				if (ret) {
+					fprintf(stderr, "atomic_set_planes failed in vsync loop\n");
+					exit_code = 1;
+					goto cleanup;
+				}
 			}
 			ret = drmModeAtomicCommit(dev.fd, dev.req, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
 			if (ret) {
 				fprintf(stderr, "Atomic Commit failed [2]\n");
-				return 1;
+				exit_code = 1;
+				goto cleanup;
 			}
 
 			pipe_args->swap_count++;
@@ -2134,10 +2262,8 @@ int main(int argc, char **argv)
 		atomic_clear_mode(&dev, pipe_args, count);
 		atomic_clear_planes(&dev, plane_args, plane_count);
 		ret = drmModeAtomicCommit(dev.fd, dev.req, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
-		if (ret) {
-			fprintf(stderr, "Atomic Commit failed\n");
-			return 1;
-		}
+		if (ret)
+			fprintf(stderr, "Atomic Commit failed: %s\n", strerror(errno));
 
 		atomic_clear_FB(&dev, plane_args, plane_count);
 		atomic_clear_wb_FB(&dev, pipe_args, count);
@@ -2146,9 +2272,15 @@ int main(int argc, char **argv)
 	if (error_monitor)
 		getchar();
 
-	drmModeAtomicFree(dev.req);
+cleanup:
+	if (dev.req)
+		drmModeAtomicFree(dev.req);
 
-	free_resources(dev.resources);
+	if (dev.resources)
+		free_resources(dev.resources);
 
-	return 0;
+	if (dev.fd >= 0)
+		drmClose(dev.fd);
+
+	return exit_code;
 }
