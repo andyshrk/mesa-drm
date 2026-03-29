@@ -1642,11 +1642,12 @@ static void atomic_clear_mode(struct device *dev, struct pipe_arg *pipes, unsign
 			continue;
 
 		/*
-		 * we only set fb to null to disable a writeback connector to
+		 * we only set fb and CRTC_ID to null to disable a writeback connector to
 		 * avoid triger crtc disable/enable on the writeback display path.
 		 */
 		if (pipe->wbc) {
 			add_property(dev, pipe->con_ids[0], "WRITEBACK_FB_ID",0);
+			add_property(dev, pipe->con_ids[0], "CRTC_ID",0);
 			continue;
 		}
 
