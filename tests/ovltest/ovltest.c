@@ -809,6 +809,13 @@ struct pipe_arg {
 
 	/* Is write back connector */
 	bool wbc;
+
+	/* AFBC format options for writeback connector */
+	bool afbc_en;
+	bool afbc_split_en;
+	bool afbc_sparse_en;
+	uint32_t block_w;  /* 16=16x16, 32=32x8, 64=64x4 */
+
 	struct bo *bo;
 	struct bo *old_bo;
 	unsigned int fb_id, old_fb_id;
@@ -1235,7 +1242,7 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p, const char 
 
 		if (p->afbc_en || p->tiled_en) {
 			if (p->afbc_en && p->block_w == 32)
-				modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_32x8 | AFBC_FORMAT_MOD_SPLIT);
+				modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_32x8);
 			else if (p->afbc_en && p->afbc_ytr_en && p->block_w == 16)
 				modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC( 1 | AFBC_FORMAT_MOD_YTR);
 			else if (p->afbc_en && p->block_w == 16)
@@ -1397,6 +1404,7 @@ static void atomic_clear_wb_FB(struct device *dev, struct pipe_arg *pipes, unsig
 static int atomic_add_wbc_fb(struct device *dev, struct pipe_arg *pipe)
 {
 	uint32_t handles[4] = {0}, pitches[4] = {0}, offsets[4] = {0};
+	uint64_t modifiers[4] = {0, 0, 0, 0};
 	uint32_t w, h;
 	struct bo *pipe_bo;
 	int ret;
@@ -1407,14 +1415,38 @@ static int atomic_add_wbc_fb(struct device *dev, struct pipe_arg *pipe)
 	w = pipe->mode->hdisplay;
 	h =  pipe->mode->vdisplay;
 	if (!pipe_bo) {
-		pipe_bo = ovl_bo_create(dev->fd, pipe->fourcc, false, w, h,
+		pipe_bo = ovl_bo_create(dev->fd, pipe->fourcc, pipe->afbc_en, w, h,
 					handles, pitches, offsets, NULL);
 
 		if (pipe_bo == NULL)
 			return -1;
 
-		ret = drmModeAddFB2(dev->fd, w, h, pipe->fourcc,
-					handles, pitches, offsets, &pipe->fb_id, 0);
+		if (pipe->afbc_en) {
+			/* Set AFBC modifiers based on block size */
+			if (pipe->block_w == 32)
+				modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_32x8);
+			else if (pipe->block_w == 16)
+				modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC(1);
+			else if (pipe->block_w == 64)
+				modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_64x4);
+
+			/* Add split and sparse flags */
+			if (pipe->afbc_split_en)
+				modifiers[0] |= AFBC_FORMAT_MOD_SPLIT;
+
+			if (pipe->afbc_sparse_en)
+				modifiers[0] |= AFBC_FORMAT_MOD_SPARSE;
+
+			/* For YUV formats, set modifier for second plane */
+			if (get_plane_num(pipe->fourcc) == 2)
+				modifiers[1] = modifiers[0];
+
+			ret = drmModeAddFB2WithModifiers(dev->fd, w, h, pipe->fourcc, handles, pitches,
+						   offsets, modifiers, &pipe->fb_id, DRM_MODE_FB_MODIFIERS);
+		} else {
+			ret = drmModeAddFB2(dev->fd, w, h, pipe->fourcc,
+						handles, pitches, offsets, &pipe->fb_id, 0);
+		}
 
 		if (ret) {
 			fprintf(stderr, "failed to add fb: %s\n", strerror(errno));
@@ -1726,6 +1758,42 @@ static int parse_connector(struct pipe_arg *pipe, const char *arg)
 	if (*p == '@') {
 		strncpy(pipe->format_str, p + 1, 4);
 		pipe->format_str[4] = '\0';
+		/* Parse AFBC format options for writeback connector */
+		if (strstr(p, "@afbc16x16")) {
+			pipe->afbc_en = true;
+			pipe->block_w = 16;
+		} else if (strstr(p, "@afbc32x8sparse")) {
+			pipe->afbc_en = true;
+			pipe->block_w = 32;
+			pipe->afbc_sparse_en = true;
+		} else if (strstr(p, "@afbc32x8split")) {
+			pipe->afbc_en = true;
+			pipe->block_w = 32;
+			pipe->afbc_split_en = true;
+		} else if (strstr(p, "@afbc32x8")) {
+			pipe->afbc_en = true;
+			pipe->block_w = 32;
+		} else if (strstr(p, "@afbc64x4")) {
+			pipe->afbc_en = true;
+			pipe->block_w = 64;
+		} else if (strstr(p, "@afbcsplitsparse")) {
+			pipe->afbc_en = true;
+			pipe->afbc_split_en = true;
+			pipe->afbc_sparse_en = true;
+			pipe->block_w = 16;
+		} else if (strstr(p, "@afbcsplit")) {
+			pipe->afbc_en = true;
+			pipe->afbc_split_en = true;
+			pipe->block_w = 16;
+		} else if (strstr(p, "@afbc")) {
+			pipe->afbc_en = true;
+			pipe->block_w = 16;
+		} else {
+			pipe->afbc_en = false;
+			pipe->block_w = 0;
+			pipe->afbc_split_en = false;
+			pipe->afbc_sparse_en = false;
+		}
 	}
 
 	pipe->fourcc = util_format_fourcc(pipe->format_str);
@@ -1803,7 +1871,11 @@ static int parse_plane(struct plane_arg *plane, const char *p)
 	if (*end == '@') {
 		strncpy(plane->format_str, end + 1, 4);
 		plane->format_str[4] = '\0';
-		if (strstr(end + 5, "@afbc32x8")) {
+		if (strstr(end + 5, "@afbc32x8sparse")) {
+			plane->afbc_en = true;
+			plane->block_w = 32;
+			plane->afbc_sparse_en = true;
+		} else if (strstr(end + 5, "@afbc32x8")) {
 			plane->afbc_en = true;
 			plane->block_w = 32;
 		} else if(strstr(end + 5, "afbcsplitsparse")) {
@@ -1899,8 +1971,8 @@ static void usage(char *name)
 
 
 	fprintf(stderr, "\n Test options:\n\n");
-	fprintf(stderr, "\t-P <plane_id>@<crtc_id>:<w>x<h>[:<crtc_w>x<crtc_h>][@stride:vir_w][+<x>+<y>][*<scale>][@<format>][@afbc][@afbc32x8][@afbcytr][@tile][@tile4x4][@rotatex/y/90/270]\tset a plane\n");
-	fprintf(stderr, "\t-s <connector_id>[,<connector_id>][@<crtc_id>]:[#<mode index>]<mode>[-<vrefresh>][@<format>]\tset a mode\n");
+	fprintf(stderr, "\t-P <plane_id>@<crtc_id>:<w>x<h>[:<crtc_w>x<crtc_h>][@stride:vir_w][+<x>+<y>][*<scale>][@<format>][@afbc][@afbc16x16][@afbc32x8][@afbc64x4][@afbcsplit][@afbcytr][@tile][@tile4x4][@rotatex/y/90/270]\tset a plane\n");
+	fprintf(stderr, "\t-s <connector_id>[,<connector_id>][@<crtc_id>]:[#<mode index>]<mode>[-<vrefresh>][@<format>][@afbc][@afbc16x16][@afbc32x8][@afbc64x4][@afbcsplit][@afbcytr]\tset a mode\n");
 	fprintf(stderr, "\t-C\ttest hw cursor\n");
 	fprintf(stderr, "\t-v\ttest vsynced page flipping\n");
 	fprintf(stderr, "\t-o\ttest dynamic turn on off plane one by one, run with -v mode\n");
