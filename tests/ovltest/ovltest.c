@@ -815,6 +815,7 @@ struct pipe_arg {
 	bool afbc_split_en;
 	bool afbc_sparse_en;
 	uint32_t block_w;  /* 16=16x16, 32=32x8, 64=64x4 */
+	uint32_t block_h;  /* 8=16x8, 16=16x16, 32=32x16, 4=64x4 */
 
 	struct bo *bo;
 	struct bo *old_bo;
@@ -1462,6 +1463,8 @@ static void write_wb_file(struct pipe_arg *pipes, unsigned int count)
 {
 	unsigned int i;
 	int fd;
+	char filename[256] = "";
+	char afbc_str[64] = "";
 
 	for (i = 0; i < count; i++) {
 		struct pipe_arg *pipe = &pipes[i];
@@ -1471,14 +1474,31 @@ static void write_wb_file(struct pipe_arg *pipes, unsigned int count)
 			 * wait for writeback complete.
 			 */
 			sleep(1);
-			fd = open("/data/wb.bin", O_WRONLY| O_TRUNC | O_CREAT, 0666);
+
+			/* Build AFBC info string */
+			if (pipe->afbc_en) {
+				snprintf(afbc_str, sizeof(afbc_str), "_afbc%dx%d",
+					 (int)pipe->block_w, (int)pipe->block_h);
+				if (pipe->afbc_split_en)
+					strcat(afbc_str, "_split");
+				if (pipe->afbc_sparse_en)
+					strcat(afbc_str, "_sparse");
+			}
+
+			/* Build filename with all info */
+			snprintf(filename, sizeof(filename), "/data/wb_%dx%d_%s%s.bin",
+				 pipe->mode->hdisplay, pipe->mode->vdisplay,
+				 pipe->format_str, afbc_str);
+
+			fd = open(filename, O_WRONLY| O_TRUNC | O_CREAT, 0666);
 			if (fd == -1) {
 				printf("Failed to open wb file : %s\n", strerror(errno));
 				return;
 			}
-			printf("write data to /data/wb.bin ...");
+			printf("write data to %s ...\n", filename);
 			write(fd, pipe->bo->ptr, pipe->bo->size);
 			printf("done\n");
+			close(fd);
 		}
 	}
 
@@ -1762,35 +1782,48 @@ static int parse_connector(struct pipe_arg *pipe, const char *arg)
 		if (strstr(p, "@afbc16x16")) {
 			pipe->afbc_en = true;
 			pipe->block_w = 16;
+			pipe->block_h = 16;
 		} else if (strstr(p, "@afbc32x8sparse")) {
 			pipe->afbc_en = true;
 			pipe->block_w = 32;
+			pipe->block_h = 8;
 			pipe->afbc_sparse_en = true;
 		} else if (strstr(p, "@afbc32x8split")) {
 			pipe->afbc_en = true;
 			pipe->block_w = 32;
+			pipe->block_h = 8;
 			pipe->afbc_split_en = true;
 		} else if (strstr(p, "@afbc32x8")) {
 			pipe->afbc_en = true;
 			pipe->block_w = 32;
+			pipe->block_h = 8;
 		} else if (strstr(p, "@afbc64x4")) {
 			pipe->afbc_en = true;
 			pipe->block_w = 64;
+			pipe->block_h = 4;
 		} else if (strstr(p, "@afbcsplitsparse")) {
 			pipe->afbc_en = true;
 			pipe->afbc_split_en = true;
 			pipe->afbc_sparse_en = true;
 			pipe->block_w = 16;
+			pipe->block_h = 16;
 		} else if (strstr(p, "@afbcsplit")) {
 			pipe->afbc_en = true;
 			pipe->afbc_split_en = true;
 			pipe->block_w = 16;
+			pipe->block_h = 16;
 		} else if (strstr(p, "@afbc")) {
 			pipe->afbc_en = true;
 			pipe->block_w = 16;
+			pipe->block_h = 16;
+		} else if (strstr(p, "@afbc")) {
+			pipe->afbc_en = true;
+			pipe->block_w = 16;
+			pipe->block_h = 16;
 		} else {
 			pipe->afbc_en = false;
 			pipe->block_w = 0;
+			pipe->block_h = 0;
 			pipe->afbc_split_en = false;
 			pipe->afbc_sparse_en = false;
 		}
