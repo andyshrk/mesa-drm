@@ -68,6 +68,8 @@ static const struct util_format_info format_info[] = {
 	{ DRM_FORMAT_YVU422, "YV16", MAKE_YUV_INFO(YUV_YCrCb, 2, 1, 1) },
 	{ DRM_FORMAT_YUV444, "YU24", MAKE_YUV_INFO(YUV_YCbCr, 1, 1, 1) },
 	{ DRM_FORMAT_YVU444, "YV24", MAKE_YUV_INFO(YUV_YCrCb, 1, 1, 1) },
+	/* AFBC only format */
+	{ DRM_FORMAT_VUY888, "VU24", MAKE_YUV_INFO(YUV_YCrCb, 1, 1, 1) },
 	/* YUV420_8BIT/YUV420_10BIT only used for AFBC test now */
 	{ DRM_FORMAT_YUV420_8BIT, "YU08", MAKE_YUV_INFO(YUV_YCrCb, 2, 2, 2) },
 	{ DRM_FORMAT_YUV420_10BIT, "YU10", MAKE_YUV_INFO(YUV_YCrCb, 2, 2, 2) },
