@@ -814,6 +814,7 @@ struct pipe_arg {
 	bool afbc_en;
 	bool afbc_split_en;
 	bool afbc_sparse_en;
+	bool rfbc_en;  /* RFBC modifier support */
 	uint32_t block_w;  /* 16=16x16, 32=32x8, 64=64x4 */
 	uint32_t block_h;  /* 8=16x8, 16=16x16, 32=32x16, 4=64x4 */
 
@@ -834,7 +835,9 @@ struct plane_arg {
 	bool afbc_split_en;
 	bool afbc_sparse_en;
 	bool tiled_en;
+	bool rfbc_en;  /* RFBC modifier support */
 	uint32_t tile_mode;  /* 0=8x8, 2=4x4_MODE0, 3=4x4_MODE1 */
+	uint32_t block_h;  /* 8=16x8, 16=16x16, 32=32x16, 4=64x4 */
 	uint32_t block_w;
 	int32_t rotation;
 	int32_t x, y;
@@ -1241,7 +1244,7 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p, const char 
 		if (plane_bo == NULL)
 			return -1;
 
-		if (p->afbc_en || p->tiled_en) {
+		if (p->afbc_en || p->tiled_en || p->rfbc_en) {
 			if (p->afbc_en && p->block_w == 32)
 				modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_32x8);
 			else if (p->afbc_en && p->afbc_ytr_en && p->block_w == 16)
@@ -1253,6 +1256,8 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p, const char 
 					modifiers[0] = DRM_FORMAT_MOD_ROCKCHIP_TILED(ROCKCHIP_TILED_BLOCK_SIZE_4x4_MODE0);
 				else
 					modifiers[0] = DRM_FORMAT_MOD_ROCKCHIP_TILED(1);
+			} else if (p->rfbc_en) {
+				modifiers[0] = DRM_FORMAT_MOD_ROCKCHIP_RFBC(ROCKCHIP_RFBC_BLOCK_SIZE_64x4);
 			}
 
 			if (modifiers[0] && p->afbc_split_en)
@@ -1416,14 +1421,14 @@ static int atomic_add_wbc_fb(struct device *dev, struct pipe_arg *pipe)
 	w = pipe->mode->hdisplay;
 	h =  pipe->mode->vdisplay;
 	if (!pipe_bo) {
-		pipe_bo = ovl_bo_create(dev->fd, pipe->fourcc, pipe->afbc_en, w, h,
+		pipe_bo = ovl_bo_create(dev->fd, pipe->fourcc, pipe->afbc_en || pipe->rfbc_en, w, h,
 					handles, pitches, offsets, NULL);
 
 		if (pipe_bo == NULL)
 			return -1;
 
+		/* Set modifiers based on AFBC/RFBC */
 		if (pipe->afbc_en) {
-			/* Set AFBC modifiers based on block size */
 			if (pipe->block_w == 32)
 				modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_32x8);
 			else if (pipe->block_w == 16)
@@ -1431,17 +1436,20 @@ static int atomic_add_wbc_fb(struct device *dev, struct pipe_arg *pipe)
 			else if (pipe->block_w == 64)
 				modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_64x4);
 
-			/* Add split and sparse flags */
 			if (pipe->afbc_split_en)
 				modifiers[0] |= AFBC_FORMAT_MOD_SPLIT;
-
 			if (pipe->afbc_sparse_en)
 				modifiers[0] |= AFBC_FORMAT_MOD_SPARSE;
+		} else if (pipe->rfbc_en) {
+			modifiers[0] = DRM_FORMAT_MOD_ROCKCHIP_RFBC(ROCKCHIP_RFBC_BLOCK_SIZE_64x4);
+		}
 
-			/* For YUV formats, set modifier for second plane */
-			if (get_plane_num(pipe->fourcc) == 2)
-				modifiers[1] = modifiers[0];
+		/* For YUV formats, set modifier for second plane */
+		if (get_plane_num(pipe->fourcc) == 2)
+			modifiers[1] = modifiers[0];
 
+		/* Add framebuffer */
+		if (pipe->afbc_en || pipe->rfbc_en) {
 			ret = drmModeAddFB2WithModifiers(dev->fd, w, h, pipe->fourcc, handles, pitches,
 						   offsets, modifiers, &pipe->fb_id, DRM_MODE_FB_MODIFIERS);
 		} else {
@@ -1475,7 +1483,7 @@ static void write_wb_file(struct pipe_arg *pipes, unsigned int count)
 			 */
 			sleep(1);
 
-			/* Build AFBC info string */
+			/* Build AFBC/RFBC info string */
 			if (pipe->afbc_en) {
 				snprintf(afbc_str, sizeof(afbc_str), "_afbc%dx%d",
 					 (int)pipe->block_w, (int)pipe->block_h);
@@ -1483,6 +1491,9 @@ static void write_wb_file(struct pipe_arg *pipes, unsigned int count)
 					strcat(afbc_str, "_split");
 				if (pipe->afbc_sparse_en)
 					strcat(afbc_str, "_sparse");
+			} else if (pipe->rfbc_en) {
+				snprintf(afbc_str, sizeof(afbc_str), "_rfbc%dx%d",
+					 (int)pipe->block_w, (int)pipe->block_h);
 			}
 
 			/* Build filename with all info */
@@ -1820,6 +1831,10 @@ static int parse_connector(struct pipe_arg *pipe, const char *arg)
 			pipe->afbc_en = true;
 			pipe->block_w = 16;
 			pipe->block_h = 16;
+		} else if (strstr(p, "@rfbc64x4")) {
+			pipe->rfbc_en = true;
+			pipe->block_w = 64;
+			pipe->block_h = 4;
 		} else {
 			pipe->afbc_en = false;
 			pipe->block_w = 0;
@@ -1937,6 +1952,10 @@ static int parse_plane(struct plane_arg *plane, const char *p)
 		} else if (strstr(end + 5, "@tile")) {
 			plane->tiled_en = true;
 			plane->tile_mode = 1;  /* 8x8 by default */
+		} else if (strstr(end + 5, "@rfbc64x4")) {
+			plane->rfbc_en = true;
+			plane->block_w = 64;
+			plane->block_h = 4;
 		}
 
 	} else {
@@ -2004,8 +2023,8 @@ static void usage(char *name)
 
 
 	fprintf(stderr, "\n Test options:\n\n");
-	fprintf(stderr, "\t-P <plane_id>@<crtc_id>:<w>x<h>[:<crtc_w>x<crtc_h>][@stride:vir_w][+<x>+<y>][*<scale>][@<format>][@afbc][@afbc16x16][@afbc32x8][@afbc64x4][@afbcsplit][@afbcytr][@tile][@tile4x4][@rotatex/y/90/270]\tset a plane\n");
-	fprintf(stderr, "\t-s <connector_id>[,<connector_id>][@<crtc_id>]:[#<mode index>]<mode>[-<vrefresh>][@<format>][@afbc][@afbc16x16][@afbc32x8][@afbc64x4][@afbcsplit][@afbcytr]\tset a mode\n");
+	fprintf(stderr, "\t-P <plane_id>@<crtc_id>:<w>x<h>[:<crtc_w>x<crtc_h>][@stride:vir_w][+<x>+<y>][*<scale>][@<format>][@afbc][@afbc16x16][@afbc32x8][@afbc64x4][@afbcsplit][@afbcytr][@tile][@tile4x4][@rfbc64x4][@rotatex/y/90/270]\tset a plane\n");
+	fprintf(stderr, "\t-s <connector_id>[,<connector_id>][@<crtc_id>]:[#<mode index>]<mode>[-<vrefresh>][@<format>][@afbc][@afbc16x16][@afbc32x8][@afbc64x4][@afbcsplit][@afbcytr][@rfbc64x4]\tset a mode\n");
 	fprintf(stderr, "\t-C\ttest hw cursor\n");
 	fprintf(stderr, "\t-v\ttest vsynced page flipping\n");
 	fprintf(stderr, "\t-o\ttest dynamic turn on off plane one by one, run with -v mode\n");
