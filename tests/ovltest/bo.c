@@ -285,6 +285,17 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 			virtual_height++;
 	}
 
+	/*
+	 * A workaround for ABD Alpha window(Tentatively treat those using the DRM_FORMAT_R8 format
+	 * as the VBD alpha window.), which will reads an extra burst16(16x16 = 256 bytes) of data
+	 */
+	if (format == DRM_FORMAT_R8){
+		unsigned int tmp = width * virtual_height * bpp >> 3;
+
+		while ((tmp + 256) > (width * virtual_height * bpp >> 3))
+			virtual_height++;
+	}
+
 	bo = bo_create_dumb(fd, width, virtual_height, bpp);
 	if (!bo)
 		return NULL;
