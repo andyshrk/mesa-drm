@@ -19,8 +19,8 @@
 # SOFTWARE.
 
 modetest = executable(
-  'wbtest',
-  files('wb.c'),
+  'wb-util',
+  files('wb-util.c'),
   c_args : [libdrm_c_args, '-Wno-pointer-arith'],
   include_directories : [inc_root, inc_tests, inc_drm],
   dependencies : [dep_threads, dep_cairo],
