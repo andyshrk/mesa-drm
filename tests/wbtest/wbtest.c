@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
+#include <poll.h>
 
 #include "xf86drm.h"
 #include "xf86drmMode.h"
@@ -250,6 +251,7 @@ struct device {
 	uint32_t main_conn_id;
 	uint32_t wb_conn_id;
 	drmModeModeInfoPtr mode;
+	int writeback_fence_fd;
 };
 
 /* Property lookup helper */
@@ -372,6 +374,8 @@ static int init_device(struct device *dev)
 		fprintf(stderr, "Failed to allocate atomic request\n");
 		return -1;
 	}
+
+	dev->writeback_fence_fd = -1;
 
 	return 0;
 }
@@ -727,6 +731,9 @@ static int setup_display_and_wb(struct device *dev, const struct test_case *test
 	/* Set writeback connector properties */
 	if (add_property(dev, dev->wb_conn_id, "WRITEBACK_FB_ID", wb_fb_id))
 		return -1;
+	if (add_property(dev, dev->wb_conn_id, "WRITEBACK_OUT_FENCE_PTR",
+			 (uintptr_t)&dev->writeback_fence_fd))
+		return -1;
 	if (add_property(dev, dev->wb_conn_id, "CRTC_ID", dev->crtc_id))
 		return -1;
 
@@ -736,6 +743,32 @@ static int setup_display_and_wb(struct device *dev, const struct test_case *test
 
 	printf("Display and writeback configured\n");
 	return 0;
+}
+
+/* Poll writeback fence */
+static int poll_writeback_fence(int fd, int timeout)
+{
+	struct pollfd fds = { fd, POLLIN };
+	int ret;
+
+	if (fd < 0)
+		return -EINVAL;
+
+	do {
+		ret = poll(&fds, 1, timeout);
+		if (ret > 0) {
+			if (fds.revents & (POLLERR | POLLNVAL))
+				return -EINVAL;
+			return 0;
+		} else if (ret == 0) {
+			return -ETIMEDOUT;
+		} else {
+			ret = -errno;
+			if (ret == -EINTR || ret == -EAGAIN)
+				continue;
+			return ret;
+		}
+	} while (1);
 }
 
 /* CRC32 calculation */
@@ -781,7 +814,11 @@ static int trigger_writeback(struct device *dev, uint32_t wb_fb_id,
 	}
 
 	/* Wait for writeback to complete */
-	sleep(1);
+	ret = poll_writeback_fence(dev->writeback_fence_fd, 1000);
+	if (ret) {
+		fprintf(stderr, "Poll for writeback fence error: %d\n", ret);
+		return -1;
+	}
 
 	/* Build AFBC/RFBC info string */
 	if (test->modifier) {
@@ -854,6 +891,12 @@ cleanup:
 	for (unsigned int i = 0; i < 3; i++) {
 		if (plane_fb_ids[i])
 			drmModeRmFB(dev->fd, plane_fb_ids[i]);
+	}
+
+	/* Close writeback fence fd */
+	if (dev->writeback_fence_fd >= 0) {
+		close(dev->writeback_fence_fd);
+		dev->writeback_fence_fd = -1;
 	}
 
 	/* Cleanup writeback FB and buffer */
