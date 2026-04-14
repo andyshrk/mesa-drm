@@ -687,25 +687,6 @@ static int setup_display_and_wb(struct device *dev, const struct test_case *test
 
 	printf("Setting up display and writeback...\n");
 
-	/* List writeback connector properties */
-	{
-		drmModeObjectPropertiesPtr props;
-		unsigned int j;
-		props = drmModeObjectGetProperties(dev->fd, dev->wb_conn_id, DRM_MODE_OBJECT_CONNECTOR);
-		if (props) {
-			printf("Writeback connector %u properties:\n", dev->wb_conn_id);
-			for (j = 0; j < props->count_props; j++) {
-				drmModePropertyPtr prop = drmModeGetProperty(dev->fd, props->props[j]);
-				if (prop) {
-					printf("  %u: %s (id=%u)\n", j,
-					       prop->name, prop->prop_id);
-					drmModeFreeProperty(prop);
-				}
-			}
-			drmModeFreeObjectProperties(props);
-		}
-	}
-
 	/* Create custom mode from resolution */
 	ret = create_custom_mode(&user_mode, test->resolution, 0);
 	if (ret < 0) {
