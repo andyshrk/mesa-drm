@@ -28,10 +28,6 @@
 
 #include "bo.h"
 
-/* Test dimensions */
-#define TEST_WIDTH	3840
-#define TEST_HEIGHT	2160
-
 /* Plane IDs from verification report */
 #define PLANE_ID_0	59
 #define PLANE_ID_1	64
@@ -390,6 +386,14 @@ static void cleanup_device(struct device *dev)
 		drmModeFreeResources(dev->resources);
 }
 
+/* Parse resolution string "WxH" into width and height */
+static int parse_resolution(const char *resolution, uint32_t *width, uint32_t *height)
+{
+	if (sscanf(resolution, "%ux%u", width, height) != 2)
+		return -EINVAL;
+	return 0;
+}
+
 /* Get number of planes for a given format - based on ovltest implementation */
 static int get_plane_num(uint32_t fourcc)
 {
@@ -485,14 +489,20 @@ static int create_wb_fb(struct device *dev, const struct test_case *test,
 	int num_planes;
 	struct bo *wb_bo;
 	bool is_compressed;
+	uint32_t width, height;
 
 	printf("Creating writeback framebuffer: %s %s\n", test->format_str,
 	       test->modifier ? test->modifier : "None");
 
+	if (parse_resolution(test->resolution, &width, &height)) {
+		fprintf(stderr, "Invalid resolution: %s\n", test->resolution);
+		return -1;
+	}
+
 	is_compressed = (test->wbc_mod != 0);
 
 	wb_bo = wb_bo_create(dev->fd, test->fourcc, is_compressed,
-			     TEST_WIDTH, TEST_HEIGHT,
+			     width, height,
 			     handles, pitches, offsets, NULL);
 	if (!wb_bo) {
 		fprintf(stderr, "Failed to create writeback buffer\n");
@@ -510,12 +520,12 @@ static int create_wb_fb(struct device *dev, const struct test_case *test,
 		modifiers[1] = test->wbc_mod;
 
 	if (test->wbc_mod) {
-		ret = drmModeAddFB2WithModifiers(dev->fd, TEST_WIDTH, TEST_HEIGHT,
+		ret = drmModeAddFB2WithModifiers(dev->fd, width, height,
 						   test->fourcc,
 						   handles, pitches, offsets, modifiers,
 						   fb_id, DRM_MODE_FB_MODIFIERS);
 	} else {
-		ret = drmModeAddFB2(dev->fd, TEST_WIDTH, TEST_HEIGHT, test->fourcc,
+		ret = drmModeAddFB2(dev->fd, width, height, test->fourcc,
 				     handles, pitches, offsets, fb_id, 0);
 	}
 
@@ -545,8 +555,14 @@ static int setup_planes(struct device *dev, const struct test_case *test,
 	uint32_t plane_ids[3] = {PLANE_ID_0, PLANE_ID_1, PLANE_ID_2};
 	int ret;
 	int num_planes;
+	uint32_t width, height;
 
 	printf("Setting up overlay planes...\n");
+
+	if (parse_resolution(test->resolution, &width, &height)) {
+		fprintf(stderr, "Invalid resolution: %s\n", test->resolution);
+		return -1;
+	}
 
 	/* Create plane buffers - each with separate arrays */
 	for (i = 0; i < 3; i++) {
@@ -559,7 +575,7 @@ static int setup_planes(struct device *dev, const struct test_case *test,
 
 		/* Alpha plane (R8) needs extra 256 bytes - handled in bo.c by increasing virtual_height */
 		plane_bos[i] = wb_bo_create(dev->fd, fourcc, false,
-					     TEST_WIDTH, TEST_HEIGHT,
+					     width, height,
 					     handles, pitches, offsets,
 					     test->file_pattern[i]);
 		if (!plane_bos[i]) {
@@ -582,7 +598,7 @@ static int setup_planes(struct device *dev, const struct test_case *test,
 		    fourcc == DRM_FORMAT_NV12 ||
 		    fourcc == DRM_FORMAT_NV16) {
 			pitches[1] = pitches[0];
-			offsets[1] = pitches[0] * TEST_HEIGHT;
+			offsets[1] = pitches[0] * height;
 			handles[1] = handles[0];
 		}
 
@@ -604,11 +620,11 @@ static int setup_planes(struct device *dev, const struct test_case *test,
 
 		/* Use AddFB2WithModifiers if modifier is non-zero, otherwise use AddFB2 */
 		if (modifier != 0) {
-			ret = drmModeAddFB2WithModifiers(dev->fd, TEST_WIDTH, TEST_HEIGHT, fourcc,
+			ret = drmModeAddFB2WithModifiers(dev->fd, width, height, fourcc,
 							  handles, pitches, offsets, modifiers,
 							  &fb_ids[i], DRM_MODE_FB_MODIFIERS);
 		} else {
-			ret = drmModeAddFB2(dev->fd, TEST_WIDTH, TEST_HEIGHT, fourcc,
+			ret = drmModeAddFB2(dev->fd, width, height, fourcc,
 					     handles, pitches, offsets, &fb_ids[i], 0);
 		}
 
@@ -624,8 +640,8 @@ static int setup_planes(struct device *dev, const struct test_case *test,
 	/* Add plane properties to atomic request */
 	for (i = 0; i < 3; i++) {
 		uint32_t plane_id = plane_ids[i];
-		uint32_t src_w = TEST_WIDTH << 16;
-		uint32_t src_h = TEST_HEIGHT << 16;
+		uint32_t src_w = width << 16;
+		uint32_t src_h = height << 16;
 
 		/* Check if plane supports needed properties */
 		if (!get_property_id(dev->fd, plane_id, DRM_MODE_OBJECT_PLANE, "FB_ID")) {
@@ -658,9 +674,9 @@ static int setup_planes(struct device *dev, const struct test_case *test,
 			goto planes_cleanup;
 		if (add_property(dev, plane_id, "CRTC_Y", 0))
 			goto planes_cleanup;
-		if (add_property(dev, plane_id, "CRTC_W", TEST_WIDTH))
+		if (add_property(dev, plane_id, "CRTC_W", width))
 			goto planes_cleanup;
-		if (add_property(dev, plane_id, "CRTC_H", TEST_HEIGHT))
+		if (add_property(dev, plane_id, "CRTC_H", height))
 			goto planes_cleanup;
 
 		/* Set zpos for layer ordering */
