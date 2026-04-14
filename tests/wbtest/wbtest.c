@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
@@ -481,6 +482,7 @@ static int create_wb_fb(struct device *dev, const struct test_case *test,
 	uint32_t offsets[4] = {0};
 	uint64_t modifiers[4] = {0};
 	int ret;
+	int num_planes;
 	struct bo *wb_bo;
 	bool is_compressed;
 
@@ -502,7 +504,7 @@ static int create_wb_fb(struct device *dev, const struct test_case *test,
 
 	/* drmModeAddFB2WithModifiers() requires modifiers only for planes actually used by format.
 	 * Setting non-zero modifier for unused planes causes kernel error. */
-	int num_planes = get_plane_num(test->fourcc);
+	num_planes = get_plane_num(test->fourcc);
 	modifiers[0] = test->wbc_mod;
 	if (num_planes == 2)
 		modifiers[1] = test->wbc_mod;
@@ -542,6 +544,7 @@ static int setup_planes(struct device *dev, const struct test_case *test,
 	struct bo *plane_bos[3] = {0};
 	uint32_t plane_ids[3] = {PLANE_ID_0, PLANE_ID_1, PLANE_ID_2};
 	int ret;
+	int num_planes;
 
 	printf("Setting up overlay planes...\n");
 
@@ -584,7 +587,7 @@ static int setup_planes(struct device *dev, const struct test_case *test,
 		}
 
 		/* drmModeAddFB2WithModifiers() requires modifiers only for planes actually used by format */
-		int num_planes = get_plane_num(fourcc);
+		num_planes = get_plane_num(fourcc);
 		modifiers[0] = modifier;
 		if (num_planes == 2)
 			modifiers[1] = modifier;
@@ -803,6 +806,9 @@ static int trigger_writeback(struct device *dev, uint32_t wb_fb_id,
 	int ret, fd;
 	char filename[256];
 	char afbc_str[64] = "";
+	uint32_t crc;
+	struct timespec ts_start, ts_end;
+	long elapsed_ms;
 
 	printf("Triggering writeback...\n");
 
@@ -814,7 +820,11 @@ static int trigger_writeback(struct device *dev, uint32_t wb_fb_id,
 	}
 
 	/* Wait for writeback to complete */
+	clock_gettime(CLOCK_MONOTONIC, &ts_start);
 	ret = poll_writeback_fence(dev->writeback_fence_fd, 1000);
+	clock_gettime(CLOCK_MONOTONIC, &ts_end);
+	elapsed_ms = (ts_end.tv_sec - ts_start.tv_sec) * 1000 +
+		     (ts_end.tv_nsec - ts_start.tv_nsec) / 1000000;
 	if (ret) {
 		fprintf(stderr, "Poll for writeback fence error: %d\n", ret);
 		return -1;
@@ -828,8 +838,6 @@ static int trigger_writeback(struct device *dev, uint32_t wb_fb_id,
 	/* Generate output filename */
 	snprintf(filename, sizeof(filename), "/data/wb_%s%s.bin",
 		 test->format_str, afbc_str);
-	printf("Writing writeback data to %s...\n", filename);
-
 	fd = open(filename, O_WRONLY | O_TRUNC | O_CREAT, 0666);
 	if (fd == -1) {
 		fprintf(stderr, "Failed to open writeback file: %s\n", strerror(errno));
@@ -844,9 +852,9 @@ static int trigger_writeback(struct device *dev, uint32_t wb_fb_id,
 	close(fd);
 
 	/* Calculate CRC32 checksum */
-	uint32_t crc = calc_crc32(wb_bo->ptr, wb_bo->size);
-	printf("Writeback data saved: %zu bytes, CRC32: %08x (expected: %08x)\n",
-	       wb_bo->size, crc, test->crc32);
+	crc = calc_crc32(wb_bo->ptr, wb_bo->size);
+	printf("Writeback completed with %ld ms, saved: %s(%zu bytes), CRC32: %08x (expected: %08x)\n",
+	       elapsed_ms, filename, wb_bo->size, crc, test->crc32);
 
 	/* Compare with expected CRC */
 	if (crc != test->crc32) {
@@ -861,7 +869,7 @@ static int trigger_writeback(struct device *dev, uint32_t wb_fb_id,
 /* Run single test case */
 static int run_test_case(struct device *dev, const struct test_case *test)
 {
-	int ret;
+	int ret = -1;
 	uint32_t wb_fb_id;
 	uint32_t plane_fb_ids[3] = {0};
 	struct bo *wb_bo = NULL;
@@ -913,6 +921,7 @@ int main(int argc, char **argv)
 	struct device dev = {0};
 	int i, pass = 0, fail = 0;
 	int num_tests;
+	unsigned int round = 0;
 	const char *device = NULL;
 	const char *module = NULL;
 
@@ -963,7 +972,6 @@ int main(int argc, char **argv)
 
 	/* Run all test cases in a loop - only exit on error */
 	i = 0;
-	unsigned int round = 0;
 	while (1) {
 		if (run_test_case(&dev, &test_cases[i]) == 0) {
 			pass++;
