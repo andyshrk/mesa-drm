@@ -4,20 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build System
 
-This is libdrm, a userspace library for accessing DRM (Direct Rendering Manager) on Linux, BSD, and other operating systems. It uses Meson as the build system.
-
-### Build Commands
-
-```bash
-# Setup meson build (creates Sbuild64/ directory for 64-bit)
-meson Sbuild64/
-
-# Build
-ninja -C Sbuild64/
-
-# Install (requires root for system locations)
-ninja -C Sbuild64/ install
-```
+This is libdrm, a userspace library for accessing DRM (Direct Rendering Manager) on Linux. It uses Meson as the build system.
+If you need to analyze the implementation of the corresponding ioctl calls in the Linux kernel, you can refer to the Linux kernel source code in the following directory: @../linux/.
 
 ### Cross-Compilation
 
@@ -29,8 +17,12 @@ meson setup  --default-library static  --cross-file  cross_aarch64 Sbuild64/
 # For arm (32-bit ARM)
 meson setup --default-library static --cross-file cross_arm  Sbuild 
 ```
-
 The cross files define toolchain paths and host machine properties (arch, endian).
+
+### Build Commands
+
+# Build
+ninja -C Sbuild64/
 
 ## Architecture
 
@@ -127,6 +119,4 @@ This codebase also supports Android build via `Android.bp` and `Android.sources.
 
 ## Important Notes
 
-- The library maintains human-readable versions for format modifiers - when adding new vendor formats, update appropriate decoding functions
-- AMDGPU requires `amdgpu.ids` file, installed to `$PREFIX/share/libdrm/` or specified via `AMDGPU_ASIC_ID_TABLE_PATHS` env var
-- The version is always 2.4.x - the patch version determines DSO versioning
+- When working with APIs provided by libdrm, if the exact behavior of an API is unclear, refer to its implementation code. If you encounter ioctl-related calls within that implementation, consult the @../linux source code to further analyze the behavior of the ioctl.
