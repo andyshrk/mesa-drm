@@ -15,7 +15,7 @@ wbtest testing by:
 
 ```bash
 # From drm root directory
-ninja -C Sbuild64/tests/wbtest
+ninja -C Sbuild64
 
 # Output binary
 ./Sbuild64/tests/wbtest/wbtest
@@ -183,7 +183,7 @@ wbtest is derived from and shares code structure with the following reference pr
 
 ### ovltest
 
-`tests/ovltest/ovltest.c` - Overlay/plane testing tool with AFBC support
+`@tests/ovltest/ovltest.c` - Overlay/plane testing tool with AFBC support
 
 **Similarities with wbtest**:
 - Shared `bo.c/bo.h` buffer object management
@@ -199,7 +199,7 @@ wbtest is derived from and shares code structure with the following reference pr
 
 ### modetest
 
-`tests/modetest/modetest.c` - Comprehensive DRM modesetting test tool
+`@tests/modetest/modetest.c` - Comprehensive DRM modesetting test tool
 
 **Similarities with wbtest**:
 - Common DRM resource discovery pattern (connectors, encoders, CRTCs, planes)
