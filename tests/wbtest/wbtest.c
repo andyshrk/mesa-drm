@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <poll.h>
+#include <pthread.h>
 
 #include "xf86drm.h"
 #include "xf86drmMode.h"
@@ -36,208 +37,8 @@
 /* User mode for custom display mode */
 static drmModeModeInfo user_mode;
 
-/* Test case structure */
-struct test_case {
-	const char *name;
-	const char *format_str;
-	const char *modifier;
-	const char *resolution;  /* Resolution string like "3840x2160" */
-	uint32_t crc32;          /* crc32 of the writeback data*/
-	uint32_t fourcc;
-	uint64_t wbc_mod;
-	uint32_t plane_format[3];  /* DRM format for each of 3 layers */
-	uint64_t plane_modifier[3];  /* Modifier for each of 3 layers */
-	const char *file_pattern[3];
-};
+#include "test_case_table.h"
 
-/* Test cases array - ordered by block size: 16x16 -> 32x8 -> 64x4 -> Raster */
-static const struct test_case test_cases[] = {
-	/* AFBC 16x16 block size */
-	/* Test case 1: YUV420 AFBC 16x16 */
-	{
-		.name = "YUV420 AFBC 16x16",
-		.format_str = "YU08",
-		.modifier = "afbc16x16",
-		.resolution = "3840x2160",
-		.fourcc = DRM_FORMAT_YUV420_8BIT,
-		.wbc_mod = DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_16x16),
-		.plane_format = {DRM_FORMAT_YUV420_8BIT, DRM_FORMAT_YUV420_8BIT, DRM_FORMAT_R8},
-		.plane_modifier = {DRM_FORMAT_MOD_ROCKCHIP_TILED(ROCKCHIP_TILED_BLOCK_SIZE_4x4_MODE0),
-				   DRM_FORMAT_MOD_ROCKCHIP_TILED(ROCKCHIP_TILED_BLOCK_SIZE_4x4_MODE0),
-				   0},
-		.file_pattern = {"res/3840x2160_y420_bin", "res/3840x2160_y420_bin", "res/3840x2160_y420_bin"},
-		.crc32 = 0xfb691f37
-	},
-	/* Test case 2: YUV422 AFBC 16x16 */
-	{
-		.name = "YUV422 AFBC 16x16",
-		.format_str = "YUYV",
-		.modifier = "afbc16x16",
-		.resolution = "3840x2160",
-		.fourcc = DRM_FORMAT_YUYV,
-		.wbc_mod = DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_16x16),
-		.plane_format = {DRM_FORMAT_YUYV, DRM_FORMAT_YUYV, DRM_FORMAT_R8},
-		.plane_modifier = {DRM_FORMAT_MOD_ROCKCHIP_TILED(ROCKCHIP_TILED_BLOCK_SIZE_4x4_MODE0),
-				   DRM_FORMAT_MOD_ROCKCHIP_TILED(ROCKCHIP_TILED_BLOCK_SIZE_4x4_MODE0),
-			           0},
-		.file_pattern = {"res/3840x2160_y422_bin", "res/3840x2160_y422_bin", "res/3840x2160_y420_bin"},
-		.crc32 = 0x91ef58ff
-	},
-	/* Test case 3: YUV444 AFBC 16x16 */
-	{
-		.name = "YUV444 AFBC 16x16",
-		.format_str = "VU24",
-		.modifier = "afbc16x16",
-		.resolution = "3840x2160",
-		.fourcc = DRM_FORMAT_VUY888,
-		.wbc_mod = DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_16x16),
-		.plane_format = {DRM_FORMAT_VUY888, DRM_FORMAT_VUY888, DRM_FORMAT_R8},
-		.plane_modifier = {DRM_FORMAT_MOD_ROCKCHIP_TILED(ROCKCHIP_TILED_BLOCK_SIZE_4x4_MODE0),
-				   DRM_FORMAT_MOD_ROCKCHIP_TILED(ROCKCHIP_TILED_BLOCK_SIZE_4x4_MODE0),
-				   0},
-		.file_pattern = {"res/3840x2160_y444_bin", "res/3840x2160_y444_bin", "res/3840x2160_y420_bin"},
-		.crc32 = 0x1451f82e
-	},
-	/* AFBC 32x8 block size */
-	/* Test case 4: YUV444 AFBC 32x8 */
-	{
-		.name = "YUV444 AFBC 32x8",
-		.format_str = "VU24",
-		.modifier = "afbc32x8",
-		.resolution = "3840x2160",
-		.fourcc = DRM_FORMAT_VUY888,
-		.wbc_mod = DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_32x8),
-		.plane_format = {DRM_FORMAT_VUY888, DRM_FORMAT_VUY888, DRM_FORMAT_R8},
-		.plane_modifier = {DRM_FORMAT_MOD_ROCKCHIP_TILED(ROCKCHIP_TILED_BLOCK_SIZE_4x4_MODE0),
-				   DRM_FORMAT_MOD_ROCKCHIP_TILED(ROCKCHIP_TILED_BLOCK_SIZE_4x4_MODE0),
-				   0},
-		.file_pattern = {"res/3840x2160_y444_bin", "res/3840x2160_y444_bin", "res/3840x2160_y420_bin"},
-		.crc32 = 0x8f6f2fb1
-	},
-	/* Test case 5: YUV422 AFBC 32x8 */
-	{
-		.name = "YUV422 AFBC 32x8",
-		.format_str = "YUYV",
-		.modifier = "afbc32x8",
-		.resolution = "3840x2160",
-		.fourcc = DRM_FORMAT_YUYV,
-		.wbc_mod = DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_32x8),
-		.plane_format = {DRM_FORMAT_YUYV, DRM_FORMAT_YUYV, DRM_FORMAT_R8},
-		.plane_modifier = {DRM_FORMAT_MOD_ROCKCHIP_TILED(ROCKCHIP_TILED_BLOCK_SIZE_4x4_MODE0),
-				   DRM_FORMAT_MOD_ROCKCHIP_TILED(ROCKCHIP_TILED_BLOCK_SIZE_4x4_MODE0),
-				   0},
-		.file_pattern = {"res/3840x2160_y422_bin", "res/3840x2160_y422_bin", "res/3840x2160_y420_bin"},
-		.crc32 = 0x6382cbeb
-	},
-	/* Test case 6: YUV420 AFBC 32x8 */
-	{
-		.name = "YUV420 AFBC 32x8",
-		.format_str = "YU08",
-		.modifier = "afbc32x8",
-		.resolution = "3840x2160",
-		.fourcc = DRM_FORMAT_YUV420_8BIT,
-		.wbc_mod = DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_32x8),
-		.plane_format = {DRM_FORMAT_YUV420_8BIT, DRM_FORMAT_YUV420_8BIT, DRM_FORMAT_R8},
-		.plane_modifier = {DRM_FORMAT_MOD_ROCKCHIP_TILED(ROCKCHIP_TILED_BLOCK_SIZE_4x4_MODE0),
-				   DRM_FORMAT_MOD_ROCKCHIP_TILED(ROCKCHIP_TILED_BLOCK_SIZE_4x4_MODE0),
-				   0},
-		.file_pattern = {"res/3840x2160_y420_bin", "res/3840x2160_y420_bin", "res/3840x2160_y420_bin"},
-		.crc32 = 0xcb9a33c6
-	},
-	/* RFBC 64x4 block size */
-	/* Test case 7: YUV444 RFBC 64x4 */
-	{
-		.name = "YUV444 RFBC 64x4",
-		.format_str = "VU24",
-		.modifier = "rfbc64x4",
-		.resolution = "3840x2160",
-		.fourcc = DRM_FORMAT_VUY888,
-		.wbc_mod = DRM_FORMAT_MOD_ROCKCHIP_RFBC(ROCKCHIP_RFBC_BLOCK_SIZE_64x4),
-		.plane_format = {DRM_FORMAT_VUY888, DRM_FORMAT_VUY888, DRM_FORMAT_R8},
-		.plane_modifier = {DRM_FORMAT_MOD_ROCKCHIP_RFBC(ROCKCHIP_RFBC_BLOCK_SIZE_64x4),
-				   DRM_FORMAT_MOD_ROCKCHIP_RFBC(ROCKCHIP_RFBC_BLOCK_SIZE_64x4),
-			           0},
-		.file_pattern = {"res/3840x2160_y444_bin", "res/3840x2160_y444_bin", "res/3840x2160_y420_bin"},
-		.crc32 = 0x38212575
-	},
-	/* Test case 8: YUV422 RFBC 64x4 */
-	{
-		.name = "YUV422 RFBC 64x4",
-		.format_str = "YUYV",
-		.modifier = "rfbc64x4",
-		.resolution = "3840x2160",
-		.fourcc = DRM_FORMAT_YUYV,
-		.wbc_mod = DRM_FORMAT_MOD_ROCKCHIP_RFBC(ROCKCHIP_RFBC_BLOCK_SIZE_64x4),
-		.plane_format = {DRM_FORMAT_YUYV, DRM_FORMAT_YUYV, DRM_FORMAT_R8},
-		.plane_modifier = {DRM_FORMAT_MOD_ROCKCHIP_RFBC(ROCKCHIP_RFBC_BLOCK_SIZE_64x4),
-				   DRM_FORMAT_MOD_ROCKCHIP_RFBC(ROCKCHIP_RFBC_BLOCK_SIZE_64x4),
-			           0},
-		.file_pattern = {"res/3840x2160_y422_bin", "res/3840x2160_y422_bin", "res/3840x2160_y420_bin"},
-		.crc32 = 0xa41e0474
-
-	},
-	/* Test case 9: YUV420 RFBC 64x4 */
-	{
-		.name = "YUV420 RFBC 64x4",
-		.format_str = "YU08",
-		.modifier = "rfbc64x4",
-		.resolution = "3840x2160",
-		.fourcc = DRM_FORMAT_YUV420_8BIT,
-		.wbc_mod = DRM_FORMAT_MOD_ROCKCHIP_RFBC(ROCKCHIP_RFBC_BLOCK_SIZE_64x4),
-		.plane_format = {DRM_FORMAT_YUV420_8BIT, DRM_FORMAT_YUV420_8BIT, DRM_FORMAT_R8},
-		.plane_modifier = {DRM_FORMAT_MOD_ROCKCHIP_RFBC(ROCKCHIP_RFBC_BLOCK_SIZE_64x4),
-				   DRM_FORMAT_MOD_ROCKCHIP_RFBC(ROCKCHIP_RFBC_BLOCK_SIZE_64x4),
-			           0},
-		.file_pattern = {"res/3840x2160_y420_bin", "res/3840x2160_y420_bin", "res/3840x2160_y420_bin"},
-		.crc32 = 0xc17a82d9
-	},
-	/* Raster (uncompressed) */
-	/* Test case 10: YUV444 Raster */
-	{
-		.name = "YUV444 Raster",
-		.format_str = "NV24",
-		.modifier = NULL,
-		.resolution = "3840x2160",
-		.fourcc = DRM_FORMAT_NV24,
-		.wbc_mod = 0,
-		.plane_format = {DRM_FORMAT_VUY888, DRM_FORMAT_VUY888, DRM_FORMAT_R8},
-		.plane_modifier = {DRM_FORMAT_MOD_ROCKCHIP_RFBC(ROCKCHIP_RFBC_BLOCK_SIZE_64x4),
-				   DRM_FORMAT_MOD_ROCKCHIP_RFBC(ROCKCHIP_RFBC_BLOCK_SIZE_64x4),
-			           0},
-		.file_pattern = {"res/3840x2160_y444_bin", "res/3840x2160_y444_bin", "res/3840x2160_y420_bin"},
-		.crc32 = 0x3acf9b38
-	},
-	/* Test case 11: YUV422 Raster */
-	{
-		.name = "YUV422 Raster",
-		.format_str = "NV16",
-		.modifier = NULL,
-		.resolution = "3840x2160",
-		.fourcc = DRM_FORMAT_NV16,
-		.wbc_mod = 0,
-		.plane_format = {DRM_FORMAT_YUYV, DRM_FORMAT_YUYV, DRM_FORMAT_R8},
-		.plane_modifier = {DRM_FORMAT_MOD_ROCKCHIP_RFBC(ROCKCHIP_RFBC_BLOCK_SIZE_64x4),
-				   DRM_FORMAT_MOD_ROCKCHIP_RFBC(ROCKCHIP_RFBC_BLOCK_SIZE_64x4),
-			           0},
-		.file_pattern = {"res/3840x2160_y422_bin", "res/3840x2160_y422_bin", "res/3840x2160_y420_bin"},
-		.crc32 = 0x6fb91620
-	},
-	/* Test case 12: YUV420 Raster */
-	{
-		.name = "YUV420 Raster",
-		.format_str = "NV12",
-		.modifier = NULL,
-		.resolution = "3840x2160",
-		.fourcc = DRM_FORMAT_NV12,
-		.wbc_mod = 0,
-		.plane_format = {DRM_FORMAT_YUV420_8BIT, DRM_FORMAT_YUV420_8BIT, DRM_FORMAT_R8},
-		.plane_modifier = {DRM_FORMAT_MOD_ROCKCHIP_RFBC(ROCKCHIP_RFBC_BLOCK_SIZE_64x4),
-				   DRM_FORMAT_MOD_ROCKCHIP_RFBC(ROCKCHIP_RFBC_BLOCK_SIZE_64x4),
-			           0},
-		.file_pattern = {"res/3840x2160_y420_bin", "res/3840x2160_y420_bin", "res/3840x2160_y420_bin"},
-		.crc32 = 0x2ed50e1a
-	}
-};
 
 /* Device structure for tracking resources */
 struct device {
@@ -248,6 +49,7 @@ struct device {
 	uint32_t main_conn_id;
 	uint32_t wb_conn_id;
 	drmModeModeInfoPtr mode;
+	uint32_t mode_blob_id;
 	int writeback_fence_fd;
 };
 
@@ -363,12 +165,6 @@ static int init_device(struct device *dev)
 
 	if (!dev->main_conn_id || !dev->wb_conn_id) {
 		fprintf(stderr, "Failed to find required connectors\n");
-		return -1;
-	}
-
-	dev->req = drmModeAtomicAlloc();
-	if (!dev->req) {
-		fprintf(stderr, "Failed to allocate atomic request\n");
 		return -1;
 	}
 
@@ -698,7 +494,6 @@ planes_cleanup:
 static int setup_display_and_wb(struct device *dev, const struct test_case *test,
 			     uint32_t wb_fb_id)
 {
-	uint32_t blob_id = 0;
 	int ret;
 
 	printf("Setting up display and writeback...\n");
@@ -716,14 +511,14 @@ static int setup_display_and_wb(struct device *dev, const struct test_case *test
 	       dev->mode->vdisplay, dev->mode->vrefresh);
 
 	/* Create mode blob for CRTC */
-	ret = drmModeCreatePropertyBlob(dev->fd, dev->mode, sizeof(*dev->mode), &blob_id);
+	ret = drmModeCreatePropertyBlob(dev->fd, dev->mode, sizeof(*dev->mode), &dev->mode_blob_id);
 	if (ret) {
 		fprintf(stderr, "Failed to create mode blob: %s\n", strerror(errno));
 		return -1;
 	}
 
 	/* Set CRTC properties */
-	if (add_property(dev, dev->crtc_id, "MODE_ID", blob_id))
+	if (add_property(dev, dev->crtc_id, "MODE_ID", dev->mode_blob_id))
 		return -1;
 	if (add_property(dev, dev->crtc_id, "ACTIVE", 1))
 		return -1;
@@ -771,39 +566,86 @@ static int poll_writeback_fence(int fd, int timeout)
 	} while (1);
 }
 
-/* CRC32 calculation */
+/* CRC32 calculation (thread-safe) */
+static uint32_t crc32_table[256];
+static pthread_once_t crc32_once = PTHREAD_ONCE_INIT;
+
+static void crc32_init_table(void)
+{
+	for (int i = 0; i < 256; i++) {
+		uint32_t c = i;
+		for (int j = 0; j < 8; j++)
+			c = (c >> 1) ^ (c & 1 ? 0xEDB88320 : 0);
+		crc32_table[i] = c;
+	}
+}
+
 static uint32_t calc_crc32(const void *data, size_t len)
 {
 	const unsigned char *p = data;
 	uint32_t crc = 0xFFFFFFFF;
-	static uint32_t table[256];
-	static int inited = 0;
 	int i;
 
-	if (!inited) {
-		for (i = 0; i < 256; i++) {
-			uint32_t c = i;
-			for (int j = 0; j < 8; j++)
-				c = (c >> 1) ^ (c & 1 ? 0xEDB88320 : 0);
-			table[i] = c;
-		}
-		inited = 1;
-	}
+	pthread_once(&crc32_once, crc32_init_table);
 
 	for (i = 0; i < (int)len; i++)
-		crc = table[(crc ^ p[i]) & 0xFF] ^ (crc >> 8);
+		crc = crc32_table[(crc ^ p[i]) & 0xFF] ^ (crc >> 8);
 
 	return crc ^ 0xFFFFFFFF;
 }
 
 /* Trigger writeback capture */
-static int trigger_writeback(struct device *dev, uint32_t wb_fb_id,
-			  struct bo *wb_bo, const struct test_case *test)
-{
-	int ret, fd;
-	char filename[256];
-	char afbc_str[64] = "";
+struct wb_result {
+	char name[128];
+	int pass;
 	uint32_t crc;
+	uint32_t expected_crc;
+};
+
+struct wb_io_work {
+	struct bo *wb_bo;
+	char filename[256];
+	uint32_t expected_crc;
+	char name[128];
+	struct wb_result *result;
+	pthread_t thread;
+};
+
+#define IO_CONCURRENCY 64
+
+static void *wb_io_thread(void *arg)
+{
+	struct wb_io_work *work = arg;
+	int fd;
+	uint32_t crc;
+
+	/* Write data to file */
+	fd = open(work->filename, O_WRONLY | O_TRUNC | O_CREAT, 0666);
+	if (fd >= 0) {
+		write(fd, work->wb_bo->ptr, work->wb_bo->size);
+		close(fd);
+	}
+
+	/* Calculate CRC32 */
+	crc = calc_crc32(work->wb_bo->ptr, work->wb_bo->size);
+
+	/* Store result */
+	snprintf(work->result->name, sizeof(work->result->name), "%s", work->name);
+	work->result->crc = crc;
+	work->result->expected_crc = work->expected_crc;
+	work->result->pass = (!work->expected_crc || crc == work->expected_crc) ? 1 : 0;
+
+	printf("  IO done: %s CRC32: %08x (expected: %08x) %s\n",
+	       work->filename, crc, work->expected_crc,
+	       work->result->pass ? "[PASS]" : "[FAIL]");
+
+	bo_destroy(work->wb_bo);
+	return NULL;
+}
+
+static int trigger_writeback(struct device *dev)
+{
+	int ret;
 	struct timespec ts_start, ts_end;
 	long elapsed_ms;
 
@@ -823,48 +665,40 @@ static int trigger_writeback(struct device *dev, uint32_t wb_fb_id,
 	elapsed_ms = (ts_end.tv_sec - ts_start.tv_sec) * 1000 +
 		     (ts_end.tv_nsec - ts_start.tv_nsec) / 1000000;
 	if (ret) {
-		fprintf(stderr, "Poll for writeback fence error: %d\n", ret);
+		fprintf(stderr, "Poll for writeback fence error: %d, elapase_ms: %ld\n", ret, elapsed_ms);
 		return -1;
 	}
 
-	/* Build AFBC/RFBC info string */
-	if (test->modifier) {
-		snprintf(afbc_str, sizeof(afbc_str), "_%s", test->modifier);
-	}
-
-	/* Generate output filename */
-	snprintf(filename, sizeof(filename), "/data/wb_%s%s.bin",
-		 test->format_str, afbc_str);
-	fd = open(filename, O_WRONLY | O_TRUNC | O_CREAT, 0666);
-	if (fd == -1) {
-		fprintf(stderr, "Failed to open writeback file: %s\n", strerror(errno));
-		return -1;
-	}
-
-	if (write(fd, wb_bo->ptr, wb_bo->size) != (ssize_t)wb_bo->size) {
-		fprintf(stderr, "Failed to write writeback data: %s\n", strerror(errno));
-		close(fd);
-		return -1;
-	}
-	close(fd);
-
-	/* Calculate CRC32 checksum */
-	crc = calc_crc32(wb_bo->ptr, wb_bo->size);
-	printf("Writeback completed with %ld ms, saved: %s(%zu bytes), CRC32: %08x (expected: %08x)\n",
-	       elapsed_ms, filename, wb_bo->size, crc, test->crc32);
-
-	/* Compare with expected CRC */
-	if (crc != test->crc32) {
-		fprintf(stderr, "CRC mismatch! calculated=%08x, expected=%08x\n",
-			crc, test->crc32);
-		return -1;
-	}
-
+	printf("Writeback completed in %ld ms\n", elapsed_ms);
 	return 0;
 }
 
+static struct wb_io_work *spawn_io_thread(struct bo *wb_bo,
+					  const struct test_case *test,
+					  int test_idx,
+					  struct wb_result *result)
+{
+	char afbc_str[64] = "";
+	struct wb_io_work *work;
+
+	if (test->modifier)
+		snprintf(afbc_str, sizeof(afbc_str), "_%s", test->modifier);
+
+	work = calloc(1, sizeof(*work));
+	work->wb_bo = wb_bo;
+	work->expected_crc = test->crc32;
+	work->result = result;
+	snprintf(work->filename, sizeof(work->filename), "/data/wb_%s_%s%s_%03d.bin",
+		 test->format_str, test->resolution, afbc_str, test_idx);
+	snprintf(work->name, sizeof(work->name), "%s", test->name);
+	pthread_create(&work->thread, NULL, wb_io_thread, work);
+	return work;
+}
+
 /* Run single test case */
-static int run_test_case(struct device *dev, const struct test_case *test)
+static int run_test_case(struct device *dev, const struct test_case *test,
+		       int test_idx, struct wb_io_work **work_out,
+		       struct wb_result *result)
 {
 	int ret = -1;
 	uint32_t wb_fb_id;
@@ -876,9 +710,16 @@ static int run_test_case(struct device *dev, const struct test_case *test)
 	printf("Format: %s, Modifier: %s\n", test->format_str,
 	       test->modifier ? test->modifier : "None");
 
+	/* Allocate fresh atomic request for this test case */
+	dev->req = drmModeAtomicAlloc();
+	if (!dev->req) {
+		fprintf(stderr, "Failed to allocate atomic request\n");
+		return -1;
+	}
+
 	/* Create writeback framebuffer */
 	if (create_wb_fb(dev, test, &wb_fb_id, &wb_bo))
-		return -1;
+		goto cleanup;
 
 	/* Setup planes */
 	if (setup_planes(dev, test, plane_fb_ids))
@@ -889,9 +730,18 @@ static int run_test_case(struct device *dev, const struct test_case *test)
 		goto cleanup;
 
 	/* Trigger writeback */
-	ret = trigger_writeback(dev, wb_fb_id, wb_bo, test);
+	ret = trigger_writeback(dev);
+	if (ret)
+		goto cleanup;
 
+	/* Spawn async IO thread, transfer wb_bo ownership */
+	*work_out = spawn_io_thread(wb_bo, test, test_idx, result);
+	wb_bo = NULL;
+	ret = 0;
 cleanup:
+	drmModeAtomicFree(dev->req);
+	dev->req = NULL;
+
 	/* Cleanup plane FBs */
 	for (unsigned int i = 0; i < 3; i++) {
 		if (plane_fb_ids[i])
@@ -904,7 +754,12 @@ cleanup:
 		dev->writeback_fence_fd = -1;
 	}
 
-	/* Cleanup writeback FB and buffer */
+	/* Destroy mode blob */
+	if (dev->mode_blob_id) {
+		drmModeDestroyPropertyBlob(dev->fd, dev->mode_blob_id);
+		dev->mode_blob_id = 0;
+	}
+
 	if (wb_bo)
 		bo_destroy(wb_bo);
 	if (wb_fb_id)
@@ -918,11 +773,15 @@ int main(int argc, char **argv)
 	struct device dev = {0};
 	int i, pass = 0, fail = 0;
 	int num_tests;
-	unsigned int round = 0;
 	const char *device = NULL;
 	const char *module = NULL;
+	struct wb_result *results;
+	struct wb_io_work *pending[IO_CONCURRENCY] = {NULL};
+	int pend_cnt = 0, pend_head = 0, pend_tail = 0;
+	unsigned int round = 0;
 
 	num_tests = sizeof(test_cases) / sizeof(test_cases[0]);
+	results = calloc(num_tests, sizeof(*results));
 
 	printf("VBD Writeback Test Program\n");
 	printf("=============================\n");
@@ -943,58 +802,104 @@ int main(int argc, char **argv)
 	dev.fd = util_open(device, module);
 	if (dev.fd < 0) {
 		fprintf(stderr, "Failed to open DRM device: %s\n", device);
-		return 1;
+		goto err_free;
 	}
 
 	/* drmSetClientCap() with DRM_CLIENT_CAP_ATOMIC enables atomic KMS API
 	 * which allows setting all display properties in a single transaction */
 	if (drmSetClientCap(dev.fd, DRM_CLIENT_CAP_ATOMIC, 1)) {
 		fprintf(stderr, "Failed to enable atomic modesetting: %s\n", strerror(errno));
-		close(dev.fd);
-		return 1;
+		goto err_close_fd;
 	}
 	/* drmSetClientCap() with DRM_CLIENT_CAP_WRITEBACK_CONNECTORS exposes
 	 * writeback connectors in the connector list for writeback functionality */
 	if (drmSetClientCap(dev.fd, DRM_CLIENT_CAP_WRITEBACK_CONNECTORS, 1)) {
 		fprintf(stderr, "Failed to enable writeback connectors: %s\n", strerror(errno));
-		close(dev.fd);
-		return 1;
+		goto err_close_fd;
 	}
 
 	/* Initialize device and find resources */
-	if (init_device(&dev)) {
-		close(dev.fd);
-		return 1;
-	}
+	if (init_device(&dev))
+		goto err_close_fd;
 
-	/* Run all test cases in a loop - only exit on error */
-	i = 0;
+	/* Run test rounds - continue if all pass, stop on any failure */
 	while (1) {
-		if (run_test_case(&dev, &test_cases[i]) == 0) {
-			pass++;
-		} else {
-			fail++;
-			fprintf(stderr, "Test case %d (%s) failed at round %u, exiting\n",
-				i, test_cases[i].name, round);
-			goto cleanup;
+		for (i = 0; i < num_tests; i++) {
+			struct wb_io_work *work = NULL;
+
+			if (run_test_case(&dev, &test_cases[i], i, &work,
+					  &results[i]) < 0)
+				goto join_pending;
+			if (work) {
+				/* If queue full, join oldest to make room */
+				if (pend_cnt == IO_CONCURRENCY) {
+					pthread_join(pending[pend_head]->thread, NULL);
+					free(pending[pend_head]);
+					pending[pend_head] = NULL;
+					pend_head = (pend_head + 1) % IO_CONCURRENCY;
+					pend_cnt--;
+				}
+				pending[pend_tail] = work;
+				pend_tail = (pend_tail + 1) % IO_CONCURRENCY;
+				pend_cnt++;
+			}
 		}
 
-		i++;
-		if (i >= num_tests) {
-			i = 0;
-			round++;
-			printf("Completed round %u\n", round);
+		/* Drain remaining IO threads at round end */
+		while (pend_cnt > 0) {
+			pthread_join(pending[pend_head]->thread, NULL);
+			free(pending[pend_head]);
+			pending[pend_head] = NULL;
+			pend_head = (pend_head + 1) % IO_CONCURRENCY;
+			pend_cnt--;
 		}
+
+		/* Check CRC results */
+		fail = 0;
+		for (int j = 0; j < num_tests; j++) {
+			if (!results[j].pass)
+				fail++;
+		}
+		if (fail)
+			break;
+
+		round++;
+		printf("\nCompleted round %u\n", round);
 	}
 
-cleanup:
-	cleanup_device(&dev);
-	close(dev.fd);
+join_pending:
+	while (pend_cnt > 0) {
+		pthread_join(pending[pend_head]->thread, NULL);
+		free(pending[pend_head]);
+		pending[pend_head] = NULL;
+		pend_head = (pend_head + 1) % IO_CONCURRENCY;
+		pend_cnt--;
+	}
 
+	cleanup_device(&dev);
+err_close_fd:
+	close(dev.fd);
+err_free:
+	free(results);
+
+	/* Summary */
+	pass = num_tests * round + (fail ? i : num_tests) - fail;
+	fail = fail > 0 ? fail : 0;
 	printf("\n========================================\n");
 	printf("Test Summary\n");
 	printf("============\n");
-	printf("Rounds: %u, Total: %d, Pass: %d, Fail: %d\n", round, num_tests, pass, fail);
+	printf("Rounds: %u, Total: %d, Pass: %d, Fail: %d\n",
+	       round + (fail > 0), num_tests, pass, fail);
+	if (fail) {
+		printf("Failed tests:\n");
+		for (int j = 0; j < num_tests; j++) {
+			if (!results[j].pass)
+				printf("  %s (CRC: %08x, expected: %08x)\n",
+				       results[j].name, results[j].crc,
+				       results[j].expected_crc);
+		}
+	}
+	printf("========================================\n");
 
 	return (fail == 0) ? 0 : 1;
 }
