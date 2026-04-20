@@ -119,7 +119,7 @@ void bo_unmap(struct bo *bo)
 	bo->ptr = NULL;
 }
 
-/* Create buffer with format support */
+/* Create buffer object with format support */
 struct bo *wb_bo_create(int fd, uint32_t format, bool is_afbc,
 		      unsigned int width, unsigned int height,
 		      uint32_t handles[4], uint32_t pitches[4],

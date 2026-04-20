@@ -1,6 +1,6 @@
 wbtest = executable(
 	'wbtest',
-	files('bo.c', 'wbtest.c'),
+	files('bo.c', 'wbtest.c', 'wb_props.c'),
 	c_args : [libdrm_c_args, '-Wno-pointer-arith'],
 	include_directories : [inc_root, inc_tests, inc_drm],
 	dependencies : [dep_threads],
