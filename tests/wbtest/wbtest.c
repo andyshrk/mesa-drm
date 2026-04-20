@@ -28,6 +28,7 @@
 #include "util/pattern.h"
 
 #include "bo.h"
+#include "wb_props.h"
 
 /* Plane IDs from verification report */
 #define PLANE_ID_0	59
@@ -51,54 +52,41 @@ struct device {
 	drmModeModeInfoPtr mode;
 	uint32_t mode_blob_id;
 	int writeback_fence_fd;
+
+	/* Property caches (populated once at init) */
+	struct wb_crtc_props crtc_props;
+	struct wb_connector_props main_conn_props;
+	struct wb_connector_props wb_conn_props;
+	struct wb_plane_props plane_props[3];
 };
 
-/* Property lookup helper */
-static uint32_t get_property_id(int fd, uint32_t obj_id, uint32_t obj_type, const char *name)
+/* Initialize property caches for all DRM objects */
+static int wb_drm_props_init(struct device *dev)
 {
-	drmModeObjectPropertiesPtr props;
-	uint32_t i;
-	uint32_t prop_id = 0;
+	unsigned int i;
+	uint32_t plane_ids[3] = {PLANE_ID_0, PLANE_ID_1, PLANE_ID_2};
 
-	props = drmModeObjectGetProperties(fd, obj_id, obj_type);
-	if (!props)
-		return 0;
+	/* CRTC properties */
+	dev->crtc_props.crtc_id = dev->crtc_id;
+	wb_crtc_props_populate(dev->fd, &dev->crtc_props);
 
-	for (i = 0; i < props->count_props; i++) {
-		drmModePropertyPtr prop = drmModeGetProperty(fd, props->props[i]);
-		if (prop && strcmp(prop->name, name) == 0) {
-			prop_id = props->props[i];
-			drmModeFreeProperty(prop);
-			break;
-		}
-		if (prop)
-			drmModeFreeProperty(prop);
+	/* Main connector properties */
+	dev->main_conn_props.connector_id = dev->main_conn_id;
+	wb_connector_props_populate(dev->fd, &dev->main_conn_props);
+
+	/* Writeback connector properties */
+	dev->wb_conn_props.connector_id = dev->wb_conn_id;
+	wb_connector_props_populate(dev->fd, &dev->wb_conn_props);
+
+	/* Plane properties */
+	for (i = 0; i < 3; i++) {
+		dev->plane_props[i].plane_id = plane_ids[i];
+		wb_plane_props_populate(dev->fd, &dev->plane_props[i]);
 	}
 
-	drmModeFreeObjectProperties(props);
-	return prop_id;
-}
-
-/* Add property to atomic request */
-static int add_property(struct device *dev, uint32_t obj_id,
-		     const char *name, uint64_t value)
-{
-	uint32_t prop_id;
-	int ret;
-
-	prop_id = get_property_id(dev->fd, obj_id,
-				  (obj_id == dev->crtc_id) ? DRM_MODE_OBJECT_CRTC :
-				  (obj_id == dev->main_conn_id || obj_id == dev->wb_conn_id) ?
-				  DRM_MODE_OBJECT_CONNECTOR : DRM_MODE_OBJECT_PLANE,
-				  name);
-	if (!prop_id) {
-		fprintf(stderr, "Failed to find property %s\n", name);
-		return -1;
-	}
-
-	ret = drmModeAtomicAddProperty(dev->req, obj_id, prop_id, value);
-	if (ret < 0) {
-		fprintf(stderr, "Failed to add property %s: %s\n", name, strerror(-ret));
+	/* Verify plane 0 has FB_ID (basic sanity check) */
+	if (dev->plane_props[0].props[WB_PLANE_FB_ID].prop_id == 0) {
+		fprintf(stderr, "Plane %u missing FB_ID property\n", plane_ids[0]);
 		return -1;
 	}
 
@@ -106,7 +94,7 @@ static int add_property(struct device *dev, uint32_t obj_id,
 }
 
 /* Initialize device and find resources */
-static int init_device(struct device *dev)
+static int wb_drm_device_init(struct device *dev)
 {
 	int i;
 
@@ -348,7 +336,6 @@ static int setup_planes(struct device *dev, const struct test_case *test,
 	uint32_t plane_offsets[3][4] = {{0}};
 	uint64_t plane_modifiers[3][4] = {{0}};
 	struct bo *plane_bos[3] = {0};
-	uint32_t plane_ids[3] = {PLANE_ID_0, PLANE_ID_1, PLANE_ID_2};
 	int ret;
 	int num_planes;
 	uint32_t width, height;
@@ -435,48 +422,34 @@ static int setup_planes(struct device *dev, const struct test_case *test,
 
 	/* Add plane properties to atomic request */
 	for (i = 0; i < 3; i++) {
-		uint32_t plane_id = plane_ids[i];
+		struct wb_plane_props *pp = &dev->plane_props[i];
 		uint32_t src_w = width << 16;
 		uint32_t src_h = height << 16;
 
-		/* Check if plane supports needed properties */
-		if (!get_property_id(dev->fd, plane_id, DRM_MODE_OBJECT_PLANE, "FB_ID")) {
-			fprintf(stderr, "Plane %u (ID: %u) not found or missing FB_ID property\n", i, plane_id);
-			goto planes_cleanup;
-		}
-		printf("Configuring plane %u (ID: %u, fourcc: 0x%08x)\n", i, plane_id,
-		       test->plane_format[i]);
+		printf("Configuring plane %u (ID: %u, fourcc: 0x%08x)\n", i,
+		       pp->plane_id, test->plane_format[i]);
 
-		/* Set plane FB_ID */
-		if (add_property(dev, plane_id, "FB_ID", fb_ids[i]))
+		if (wb_plane_prop_add(dev->req, pp, WB_PLANE_FB_ID, fb_ids[i]))
 			goto planes_cleanup;
-
-		/* Set plane CRTC_ID */
-		if (add_property(dev, plane_id, "CRTC_ID", dev->crtc_id))
+		if (wb_plane_prop_add(dev->req, pp, WB_PLANE_CRTC_ID, dev->crtc_id))
 			goto planes_cleanup;
-
-		/* Set source position and size */
-		if (add_property(dev, plane_id, "SRC_X", 0))
+		if (wb_plane_prop_add(dev->req, pp, WB_PLANE_SRC_X, 0))
 			goto planes_cleanup;
-		if (add_property(dev, plane_id, "SRC_Y", 0))
+		if (wb_plane_prop_add(dev->req, pp, WB_PLANE_SRC_Y, 0))
 			goto planes_cleanup;
-		if (add_property(dev, plane_id, "SRC_W", src_w))
+		if (wb_plane_prop_add(dev->req, pp, WB_PLANE_SRC_W, src_w))
 			goto planes_cleanup;
-		if (add_property(dev, plane_id, "SRC_H", src_h))
+		if (wb_plane_prop_add(dev->req, pp, WB_PLANE_SRC_H, src_h))
 			goto planes_cleanup;
-
-		/* Set CRTC position and size */
-		if (add_property(dev, plane_id, "CRTC_X", 0))
+		if (wb_plane_prop_add(dev->req, pp, WB_PLANE_CRTC_X, 0))
 			goto planes_cleanup;
-		if (add_property(dev, plane_id, "CRTC_Y", 0))
+		if (wb_plane_prop_add(dev->req, pp, WB_PLANE_CRTC_Y, 0))
 			goto planes_cleanup;
-		if (add_property(dev, plane_id, "CRTC_W", width))
+		if (wb_plane_prop_add(dev->req, pp, WB_PLANE_CRTC_W, width))
 			goto planes_cleanup;
-		if (add_property(dev, plane_id, "CRTC_H", height))
+		if (wb_plane_prop_add(dev->req, pp, WB_PLANE_CRTC_H, height))
 			goto planes_cleanup;
-
-		/* Set zpos for layer ordering */
-		if (add_property(dev, plane_id, "zpos", i))
+		if (wb_plane_prop_add(dev->req, pp, WB_PLANE_ZPOS, i))
 			goto planes_cleanup;
 	}
 
@@ -518,22 +491,22 @@ static int setup_display_and_wb(struct device *dev, const struct test_case *test
 	}
 
 	/* Set CRTC properties */
-	if (add_property(dev, dev->crtc_id, "MODE_ID", dev->mode_blob_id))
+	if (wb_crtc_prop_add(dev->req, &dev->crtc_props, WB_CRTC_MODE_ID, dev->mode_blob_id))
 		return -1;
-	if (add_property(dev, dev->crtc_id, "ACTIVE", 1))
+	if (wb_crtc_prop_add(dev->req, &dev->crtc_props, WB_CRTC_ACTIVE, 1))
 		return -1;
 
 	/* Set writeback connector properties */
-	if (add_property(dev, dev->wb_conn_id, "WRITEBACK_FB_ID", wb_fb_id))
+	if (wb_connector_prop_add(dev->req, &dev->wb_conn_props, WB_CONNECTOR_WRITEBACK_FB_ID, wb_fb_id))
 		return -1;
-	if (add_property(dev, dev->wb_conn_id, "WRITEBACK_OUT_FENCE_PTR",
-			 (uintptr_t)&dev->writeback_fence_fd))
+	if (wb_connector_prop_add(dev->req, &dev->wb_conn_props, WB_CONNECTOR_WRITEBACK_OUT_FENCE_PTR,
+				  (uintptr_t)&dev->writeback_fence_fd))
 		return -1;
-	if (add_property(dev, dev->wb_conn_id, "CRTC_ID", dev->crtc_id))
+	if (wb_connector_prop_add(dev->req, &dev->wb_conn_props, WB_CONNECTOR_CRTC_ID, dev->crtc_id))
 		return -1;
 
 	/* Set main connector CRTC_ID */
-	if (add_property(dev, dev->main_conn_id, "CRTC_ID", dev->crtc_id))
+	if (wb_connector_prop_add(dev->req, &dev->main_conn_props, WB_CONNECTOR_CRTC_ID, dev->crtc_id))
 		return -1;
 
 	printf("Display and writeback configured\n");
@@ -665,7 +638,7 @@ static int trigger_writeback(struct device *dev)
 	elapsed_ms = (ts_end.tv_sec - ts_start.tv_sec) * 1000 +
 		     (ts_end.tv_nsec - ts_start.tv_nsec) / 1000000;
 	if (ret) {
-		fprintf(stderr, "Poll for writeback fence error: %d, elapase_ms: %ld\n", ret, elapsed_ms);
+		fprintf(stderr, "Poll for writeback fence error: %d, elapase: %ld ms\n", ret, elapsed_ms);
 		return -1;
 	}
 
@@ -819,16 +792,19 @@ int main(int argc, char **argv)
 	}
 
 	/* Initialize device and find resources */
-	if (init_device(&dev))
+	if (wb_drm_device_init(&dev))
 		goto err_close_fd;
+
+	/* Cache property IDs for all DRM objects (one-time) */
+	if (wb_drm_props_init(&dev))
+		goto err_cleanup;
 
 	/* Run test rounds - continue if all pass, stop on any failure */
 	while (1) {
 		for (i = 0; i < num_tests; i++) {
 			struct wb_io_work *work = NULL;
 
-			if (run_test_case(&dev, &test_cases[i], i, &work,
-					  &results[i]) < 0)
+			if (run_test_case(&dev, &test_cases[i], i, &work, &results[i]) < 0)
 				goto join_pending;
 			if (work) {
 				/* If queue full, join oldest to make room */
@@ -877,6 +853,7 @@ join_pending:
 	}
 
 	cleanup_device(&dev);
+err_cleanup:
 err_close_fd:
 	close(dev.fd);
 err_free:
