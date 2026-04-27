@@ -52,6 +52,7 @@ struct device {
 	drmModeModeInfoPtr mode;
 	uint32_t mode_blob_id;
 	int writeback_fence_fd;
+	int write_file;
 
 	/* Property caches (populated once at init) */
 	struct wb_crtc_props crtc_props;
@@ -582,6 +583,7 @@ struct wb_io_work {
 	char name[128];
 	struct wb_result *result;
 	pthread_t thread;
+	struct device *dev;
 };
 
 #define IO_CONCURRENCY 64
@@ -589,14 +591,15 @@ struct wb_io_work {
 static void *wb_io_thread(void *arg)
 {
 	struct wb_io_work *work = arg;
-	int fd;
 	uint32_t crc;
 
 	/* Write data to file */
-	fd = open(work->filename, O_WRONLY | O_TRUNC | O_CREAT, 0666);
-	if (fd >= 0) {
-		write(fd, work->wb_bo->ptr, work->wb_bo->size);
-		close(fd);
+	if (work->dev->write_file) {
+		int fd = open(work->filename, O_WRONLY | O_TRUNC | O_CREAT, 0666);
+		if (fd >= 0) {
+			write(fd, work->wb_bo->ptr, work->wb_bo->size);
+			close(fd);
+		}
 	}
 
 	/* Calculate CRC32 */
@@ -608,9 +611,14 @@ static void *wb_io_thread(void *arg)
 	work->result->expected_crc = work->expected_crc;
 	work->result->pass = (!work->expected_crc || crc == work->expected_crc) ? 1 : 0;
 
-	printf("  IO done: %s CRC32: %08x (expected: %08x) %s\n",
-	       work->filename, crc, work->expected_crc,
-	       work->result->pass ? "[PASS]" : "[FAIL]");
+	if (work->dev->write_file)
+		printf("  IO done: %s CRC32: %08x (expected: %08x) %s\n",
+		       work->filename, crc, work->expected_crc,
+		       work->result->pass ? "[PASS]" : "[FAIL]");
+	else
+		printf("  %s CRC32: %08x (expected: %08x) %s\n",
+		       work->name, crc, work->expected_crc,
+		       work->result->pass ? "[PASS]" : "[FAIL]");
 
 	bo_destroy(work->wb_bo);
 	return NULL;
@@ -649,7 +657,8 @@ static int trigger_writeback(struct device *dev)
 static struct wb_io_work *spawn_io_thread(struct bo *wb_bo,
 					  const struct test_case *test,
 					  int test_idx,
-					  struct wb_result *result)
+					  struct wb_result *result,
+					  struct device *dev)
 {
 	char afbc_str[64] = "";
 	struct wb_io_work *work;
@@ -661,6 +670,7 @@ static struct wb_io_work *spawn_io_thread(struct bo *wb_bo,
 	work->wb_bo = wb_bo;
 	work->expected_crc = test->crc32;
 	work->result = result;
+	work->dev = dev;
 	snprintf(work->filename, sizeof(work->filename), "/data/wb_%s_%s%s_%03d.bin",
 		 test->format_str, test->resolution, afbc_str, test_idx);
 	snprintf(work->name, sizeof(work->name), "%s", test->name);
@@ -708,7 +718,7 @@ static int run_test_case(struct device *dev, const struct test_case *test,
 		goto cleanup;
 
 	/* Spawn async IO thread, transfer wb_bo ownership */
-	*work_out = spawn_io_thread(wb_bo, test, test_idx, result);
+	*work_out = spawn_io_thread(wb_bo, test, test_idx, result, dev);
 	wb_bo = NULL;
 	ret = 0;
 cleanup:
@@ -762,10 +772,9 @@ int main(int argc, char **argv)
 
 	/* Parse command line arguments for device/module selection */
 	for (i = 1; i < argc; i++) {
-		if (argv[i][0] == '-')
-			continue;
-
-		if (strcmp(argv[i], "-M") == 0)
+		if (strcmp(argv[i], "-w") == 0)
+			dev.write_file = 1;
+		else if (strcmp(argv[i], "-M") == 0)
 			device = argv[++i];
 		else if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "-m") == 0)
 			module = argv[++i];
