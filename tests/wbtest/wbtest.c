@@ -276,7 +276,7 @@ static int create_wb_fb(struct device *dev, const struct test_case *test,
 	bool is_compressed;
 	uint32_t width, height;
 
-	printf("Creating writeback framebuffer: %s %s\n", test->format_str,
+	printf("Creating writeback framebuffer: %s Modifier: %s\n", test->format_str,
 	       test->modifier ? test->modifier : "None");
 
 	if (parse_resolution(test->resolution, &width, &height)) {
@@ -418,7 +418,7 @@ static int setup_planes(struct device *dev, const struct test_case *test,
 			goto planes_cleanup;
 		}
 
-		printf("Plane %u: fourcc=0x%08x, fb_id=%u\n", i, fourcc, fb_ids[i]);
+		//printf("Plane %u: fourcc=0x%08x, fb_id=%u\n", i, fourcc, fb_ids[i]);
 	}
 
 	/* Add plane properties to atomic request */
@@ -427,8 +427,8 @@ static int setup_planes(struct device *dev, const struct test_case *test,
 		uint32_t src_w = width << 16;
 		uint32_t src_h = height << 16;
 
-		printf("Configuring plane %u (ID: %u, fourcc: 0x%08x)\n", i,
-		       pp->plane_id, test->plane_format[i]);
+		//printf("Configuring plane %u (ID: %u, fourcc: 0x%08x)\n", i,
+		 //      pp->plane_id, test->plane_format[i]);
 
 		if (wb_plane_prop_add(dev->req, pp, WB_PLANE_FB_ID, fb_ids[i]))
 			goto planes_cleanup;
@@ -646,7 +646,7 @@ static int trigger_writeback(struct device *dev)
 	elapsed_ms = (ts_end.tv_sec - ts_start.tv_sec) * 1000 +
 		     (ts_end.tv_nsec - ts_start.tv_nsec) / 1000000;
 	if (ret) {
-		fprintf(stderr, "Poll for writeback fence error: %d, elapase: %ld ms\n", ret, elapsed_ms);
+		fprintf(stderr, "Poll for writeback fence timeout: %d, elapase: %ld ms\n", ret, elapsed_ms);
 		return -1;
 	}
 
