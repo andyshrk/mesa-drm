@@ -1,8 +1,6 @@
 /*
- * VBD Writeback Test Program
+ * Writeback Test Program
  * Auto-run all VBD 3-layer composite writeback tests
- * Simulates Intel FPGA EM2130 platform with multiple overlay layers
- * Captures writeback data for validation
  */
 
 #include <errno.h>
@@ -30,10 +28,14 @@
 #include "bo.h"
 #include "wb_props.h"
 
-/* Plane IDs from verification report */
-#define PLANE_ID_0	59
-#define PLANE_ID_1	64
-#define PLANE_ID_2	69
+/* Number of planes participating in video blending */
+#define VBD_PLANE_NR	3
+
+/* Plane layers discovered dynamically at init:
+ * Layer 0 (bottom): Primary plane
+ * Layer 1 (middle): Overlay plane
+ * Layer 2 (top):    plane supporting DRM_FORMAT_R8
+ */
 
 /* User mode for custom display mode */
 static drmModeModeInfo user_mode;
@@ -58,14 +60,138 @@ struct device {
 	struct wb_crtc_props crtc_props;
 	struct wb_connector_props main_conn_props;
 	struct wb_connector_props wb_conn_props;
-	struct wb_plane_props plane_props[3];
+	struct wb_plane_props plane_props[VBD_PLANE_NR];
 };
+
+static const char *plane_type(int type)
+{
+	switch (type) {
+	case DRM_PLANE_TYPE_PRIMARY: return "Primary";
+	case DRM_PLANE_TYPE_OVERLAY: return "Overlay";
+	case DRM_PLANE_TYPE_CURSOR:  return "Cursor";
+	default:                     return "Unknown";
+	}
+}
+
+/* Get plane type (DRM_PLANE_TYPE_*) from KMS properties */
+static int wb_get_plane_type(int fd, uint32_t plane_id)
+{
+	drmModeObjectPropertiesPtr props;
+	unsigned int i;
+	int type = -1;
+
+	props = drmModeObjectGetProperties(fd, plane_id, DRM_MODE_OBJECT_PLANE);
+	if (!props)
+		return -1;
+
+	for (i = 0; i < props->count_props; i++) {
+		drmModePropertyPtr prop = drmModeGetProperty(fd, props->props[i]);
+		if (!prop)
+			continue;
+		if (strcmp(prop->name, "type") == 0) {
+			type = (int)props->prop_values[i];
+			drmModeFreeProperty(prop);
+			break;
+		}
+		drmModeFreeProperty(prop);
+	}
+
+	drmModeFreeObjectProperties(props);
+	return type;
+}
+
+/* Discover planes dynamically and assign to layers:
+ * Layer 0: Primary plane (bottom)
+ * Layer 2: plane supporting DRM_FORMAT_R8 (top)
+ * Layer 1: remaining Overlay plane (middle)
+ */
+static int wb_discover_planes(struct device *dev, uint32_t plane_ids[VBD_PLANE_NR])
+{
+	drmModePlaneResPtr plane_res;
+	int crtc_idx, i;
+
+	plane_res = drmModeGetPlaneResources(dev->fd);
+	if (!plane_res) {
+		fprintf(stderr, "Failed to get plane resources\n");
+		return -1;
+	}
+
+	/* Find CRTC index for possible_crtcs bitmask matching */
+	crtc_idx = -1;
+	for (i = 0; i < dev->resources->count_crtcs; i++) {
+		if (dev->resources->crtcs[i] == dev->crtc_id) {
+			crtc_idx = i;
+			break;
+		}
+	}
+	if (crtc_idx < 0) {
+		fprintf(stderr, "CRTC %u not found in resources\n", dev->crtc_id);
+		drmModeFreePlaneResources(plane_res);
+		return -1;
+	}
+
+	printf("Discovering planes for CRTC %u (index %d):\n", dev->crtc_id, crtc_idx);
+	memset(plane_ids, 0, VBD_PLANE_NR * sizeof(uint32_t));
+
+	for (i = 0; i < (int)plane_res->count_planes; i++) {
+		drmModePlanePtr plane;
+		int type, j, support_r8;
+
+		plane = drmModeGetPlane(dev->fd, plane_res->planes[i]);
+		if (!plane)
+			continue;
+
+		/* Skip planes that cannot use our CRTC */
+		if (!(plane->possible_crtcs & (1 << crtc_idx))) {
+			drmModeFreePlane(plane);
+			continue;
+		}
+
+		type = wb_get_plane_type(dev->fd, plane->plane_id);
+
+		/* Check DRM_FORMAT_R8 support */
+		support_r8 = 0;
+		for (j = 0; j < (int)plane->count_formats; j++) {
+			if (plane->formats[j] == DRM_FORMAT_R8) {
+				support_r8 = 1;
+				break;
+			}
+		}
+
+		printf("  Plane %u: type=%s, R8=%s\n",
+		       plane->plane_id, plane_type(type), support_r8 ? "yes" : "no");
+
+		/* Assign to layers by priority:
+		 * Primary → layer 0, R8 supporter → layer 2, remaining Overlay → layer 1 */
+		if (type == DRM_PLANE_TYPE_PRIMARY && !plane_ids[0])
+			plane_ids[0] = plane->plane_id;
+		else if (support_r8 && !plane_ids[2])
+			plane_ids[2] = plane->plane_id;
+		else if (type == DRM_PLANE_TYPE_OVERLAY && !plane_ids[1])
+			plane_ids[1] = plane->plane_id;
+
+		drmModeFreePlane(plane);
+	}
+
+	drmModeFreePlaneResources(plane_res);
+
+	for (i = 0; i < VBD_PLANE_NR; i++) {
+		if (!plane_ids[i]) {
+			fprintf(stderr, "Failed to find plane for layer %d\n", i);
+			return -1;
+		}
+	}
+
+	printf("Plane assignment: layer0(Primary)=%u, layer1(Overlay)=%u, layer2(R8)=%u\n",
+	       plane_ids[0], plane_ids[1], plane_ids[2]);
+	return 0;
+}
 
 /* Initialize property caches for all DRM objects */
 static int wb_drm_props_init(struct device *dev)
 {
 	unsigned int i;
-	uint32_t plane_ids[3] = {PLANE_ID_0, PLANE_ID_1, PLANE_ID_2};
+	uint32_t plane_ids[VBD_PLANE_NR];
 
 	/* CRTC properties */
 	dev->crtc_props.crtc_id = dev->crtc_id;
@@ -79,8 +205,12 @@ static int wb_drm_props_init(struct device *dev)
 	dev->wb_conn_props.connector_id = dev->wb_conn_id;
 	wb_connector_props_populate(dev->fd, &dev->wb_conn_props);
 
+	/* Discover planes dynamically */
+	if (wb_discover_planes(dev, plane_ids))
+		return -1;
+
 	/* Plane properties */
-	for (i = 0; i < 3; i++) {
+	for (i = 0; i < VBD_PLANE_NR; i++) {
 		dev->plane_props[i].plane_id = plane_ids[i];
 		wb_plane_props_populate(dev->fd, &dev->plane_props[i]);
 	}
@@ -180,7 +310,7 @@ static int parse_resolution(const char *resolution, uint32_t *width, uint32_t *h
 }
 
 /* Get number of planes for a given format - based on ovltest implementation */
-static int get_plane_num(uint32_t fourcc)
+static int wb_get_plane_num(uint32_t fourcc)
 {
 	switch (fourcc) {
 	case DRM_FORMAT_NV12:
@@ -299,7 +429,7 @@ static int create_wb_fb(struct device *dev, const struct test_case *test,
 
 	/* drmModeAddFB2WithModifiers() requires modifiers only for planes actually used by format.
 	 * Setting non-zero modifier for unused planes causes kernel error. */
-	num_planes = get_plane_num(test->fourcc);
+	num_planes = wb_get_plane_num(test->fourcc);
 	modifiers[0] = test->wbc_mod;
 	if (num_planes == 2)
 		modifiers[1] = test->wbc_mod;
@@ -332,11 +462,11 @@ static int setup_planes(struct device *dev, const struct test_case *test,
 {
 	unsigned int i;
 	/* Separate arrays for each plane to avoid overwriting */
-	uint32_t plane_handles[3][4] = {{0}};
-	uint32_t plane_pitches[3][4] = {{0}};
-	uint32_t plane_offsets[3][4] = {{0}};
-	uint64_t plane_modifiers[3][4] = {{0}};
-	struct bo *plane_bos[3] = {0};
+	uint32_t plane_handles[VBD_PLANE_NR][4] = {{0}};
+	uint32_t plane_pitches[VBD_PLANE_NR][4] = {{0}};
+	uint32_t plane_offsets[VBD_PLANE_NR][4] = {{0}};
+	uint64_t plane_modifiers[VBD_PLANE_NR][4] = {{0}};
+	struct bo *plane_bos[VBD_PLANE_NR] = {0};
 	int ret;
 	int num_planes;
 	uint32_t width, height;
@@ -349,7 +479,7 @@ static int setup_planes(struct device *dev, const struct test_case *test,
 	}
 
 	/* Create plane buffers - each with separate arrays */
-	for (i = 0; i < 3; i++) {
+	for (i = 0; i < VBD_PLANE_NR; i++) {
 		uint32_t fourcc = test->plane_format[i];
 		uint64_t modifier = test->plane_modifier[i];
 		uint32_t *handles = plane_handles[i];
@@ -387,14 +517,14 @@ static int setup_planes(struct device *dev, const struct test_case *test,
 		}
 
 		/* drmModeAddFB2WithModifiers() requires modifiers only for planes actually used by format */
-		num_planes = get_plane_num(fourcc);
+		num_planes = wb_get_plane_num(fourcc);
 		modifiers[0] = modifier;
 		if (num_planes == 2)
 			modifiers[1] = modifier;
 	}
 
 	/* Create all framebuffers */
-	for (i = 0; i < 3; i++) {
+	for (i = 0; i < VBD_PLANE_NR; i++) {
 		uint32_t fourcc = test->plane_format[i];
 		uint64_t modifier = test->plane_modifier[i];
 		uint32_t *handles = plane_handles[i];
@@ -422,7 +552,7 @@ static int setup_planes(struct device *dev, const struct test_case *test,
 	}
 
 	/* Add plane properties to atomic request */
-	for (i = 0; i < 3; i++) {
+	for (i = 0; i < VBD_PLANE_NR; i++) {
 		struct wb_plane_props *pp = &dev->plane_props[i];
 		uint32_t src_w = width << 16;
 		uint32_t src_h = height << 16;
@@ -457,7 +587,7 @@ static int setup_planes(struct device *dev, const struct test_case *test,
 	ret = 0;
 
 planes_cleanup:
-	for (i = 0; i < 3; i++) {
+	for (i = 0; i < VBD_PLANE_NR; i++) {
 		if (plane_bos[i])
 			bo_destroy(plane_bos[i]);
 	}
@@ -685,7 +815,7 @@ static int run_test_case(struct device *dev, const struct test_case *test,
 {
 	int ret = -1;
 	uint32_t wb_fb_id;
-	uint32_t plane_fb_ids[3] = {0};
+	uint32_t plane_fb_ids[VBD_PLANE_NR] = {0};
 	struct bo *wb_bo = NULL;
 
 	printf("\n========================================\n");
@@ -726,7 +856,7 @@ cleanup:
 	dev->req = NULL;
 
 	/* Cleanup plane FBs */
-	for (unsigned int i = 0; i < 3; i++) {
+	for (unsigned int i = 0; i < VBD_PLANE_NR; i++) {
 		if (plane_fb_ids[i])
 			drmModeRmFB(dev->fd, plane_fb_ids[i]);
 	}
