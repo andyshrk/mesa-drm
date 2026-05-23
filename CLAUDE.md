@@ -120,3 +120,5 @@ This codebase also supports Android build via `Android.bp` and `Android.sources.
 ## Important Notes
 
 - When working with APIs provided by libdrm, if the exact behavior of an API is unclear, refer to its implementation code. If you encounter ioctl-related calls within that implementation, consult the @../linux source code to further analyze the behavior of the ioctl.
+- Always use the -s option when making git commits
+- Do not use the Co-Authored-By tag when making git cmmits.
