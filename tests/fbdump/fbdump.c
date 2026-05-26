@@ -88,12 +88,18 @@ struct resources {
 	struct plane *planes;
 };
 
+enum getfb_api {
+	GETFB_API_1 = 1,
+	GETFB_API_2 = 2,
+};
+
 struct device {
 	int fd;
 
 	struct resources *resources;
 	uint32_t crtc_id;
 	char *dir;
+	enum getfb_api getfb_api;
 };
 
 static const char *modifier_to_string(uint64_t modifier)
@@ -168,6 +174,20 @@ static char *fourcc2str(uint32_t fourcc)
 	return name;
 }
 
+static const char *bpp2str(uint32_t bpp)
+{
+	switch (bpp) {
+	case 16:
+		return "RG16";
+	case 24:
+		return "RG24";
+	case 32:
+		return "XR32";
+	default:
+		return "UNKNOWN";
+	}
+}
+
 static void write_fb_file(char *buffer, const char *filename, size_t size)
 {
 	int fd;
@@ -191,11 +211,19 @@ static void print_plane_info(drmModePlane *ovr, const char *dump_file)
 
 static void dump_planes(struct device *dev)
 {
-	drmModeFB2Ptr fb;
+	struct plane *plane;
+	drmModePlane *ovr;
+	drmModeFB2Ptr fb2;
+	drmModeFBPtr fb;
+	const char *dump_file;
+	uint32_t handle;
+	uint32_t pitch;
+	uint32_t offset;
+	uint32_t width;
+	uint32_t height;
+	uint32_t bpp;
+	uint64_t modifier;
 	int bo_fd;
-	size_t fb_size = 0;
-	size_t map_size = 0;
-	size_t afbc_size = 0;
 	unsigned int i;
 	void *data;
 	char path[PIC_NAME_MAX_LEN];
@@ -203,7 +231,10 @@ static void dump_planes(struct device *dev)
 	char *dir;
 	const char *sep;
 	char *format_name;
-	uint32_t bpp;
+	const char *format;
+	size_t fb_size;
+	size_t map_size;
+	size_t afbc_size;
 
 
 	printf("Planes:\n");
@@ -213,9 +244,15 @@ static void dump_planes(struct device *dev)
 		return;
 
 	for (i = 0; i < dev->resources->plane_res->count_planes; i++) {
-		struct plane *plane = &dev->resources->planes[i];
-		drmModePlane *ovr = plane->plane;
-		const char *dump_file = "-";
+		plane = &dev->resources->planes[i];
+		ovr = plane->plane;
+		dump_file = "-";
+		fb2 = NULL;
+		fb = NULL;
+		offset = 0;
+		modifier = 0;
+		format_name = NULL;
+		afbc_size = 0;
 
 		if (!ovr)
 			continue;
@@ -226,16 +263,39 @@ static void dump_planes(struct device *dev)
 		if (!ovr->fb_id)
 			goto out_print;
 
-		fb = drmModeGetFB2(dev->fd, ovr->fb_id);
-		if (!fb) {
-			fprintf(stderr, "drmModeGetFB2 for fb: %d failed: %s\n",
-				ovr->fb_id, strerror(errno));
-			goto out_print;
+		if (dev->getfb_api == GETFB_API_1) {
+			fb = drmModeGetFB(dev->fd, ovr->fb_id);
+			if (!fb) {
+				fprintf(stderr, "drmModeGetFB for fb: %d failed: %s\n",
+					ovr->fb_id, strerror(errno));
+				goto out_print;
+			}
+
+			handle = fb->handle;
+			pitch = fb->pitch;
+			width = fb->width;
+			height = fb->height;
+			bpp = fb->bpp;
+		} else {
+			fb2 = drmModeGetFB2(dev->fd, ovr->fb_id);
+			if (!fb2) {
+				fprintf(stderr, "drmModeGetFB2 for fb: %d failed: %s\n",
+					ovr->fb_id, strerror(errno));
+				goto out_print;
+			}
+
+			handle = fb2->handles[0];
+			pitch = fb2->pitches[0];
+			offset = fb2->offsets[0];
+			width = fb2->width;
+			height = fb2->height;
+			modifier = fb2->modifier;
+			bpp = drm_get_bpp(fb2->pixel_format);
 		}
-		bpp = drm_get_bpp(fb->pixel_format);
-		fb_size = (size_t)fb->pitches[0] * fb->height;
-		if (drm_is_afbc(fb->modifier)) {
-			afbc_size = drm_gem_afbc_min_size(fb->pixel_format, fb->width, fb->height, fb->modifier);
+
+		fb_size = (size_t)pitch * height;
+		if (fb2 && drm_is_afbc(modifier)) {
+			afbc_size = drm_gem_afbc_min_size(fb2->pixel_format, width, height, modifier);
 			/*
 			 * The calculation of the size of the afbc buffer is relatively
 			 * complex:
@@ -250,10 +310,11 @@ static void dump_planes(struct device *dev)
 		if (afbc_size > fb_size)
 			fb_size = afbc_size;
 		/* The framebuffer pixels start at offsets[0] inside the BO. */
-		map_size = fb->offsets[0] + fb_size;
-		if (drmPrimeHandleToFD(dev->fd, fb->handles[0], 0, &bo_fd)) {
+		map_size = offset + fb_size;
+		if (drmPrimeHandleToFD(dev->fd, handle, 0, &bo_fd)) {
 			fprintf(stderr, "Failed to get fb fd: %s\n", strerror(errno));
-			drmModeFreeFB2(fb);
+			drmModeFreeFB2(fb2);
+			drmModeFreeFB(fb);
 			goto out_print;
 		}
 
@@ -261,11 +322,17 @@ static void dump_planes(struct device *dev)
 		if (data == MAP_FAILED) {
 			fprintf(stderr, "Failed to mmap: %s\n", strerror(errno));
 			close(bo_fd);
-			drmModeFreeFB2(fb);
+			drmModeFreeFB2(fb2);
+			drmModeFreeFB(fb);
 			goto out_print;
 		}
 
-		format_name = fourcc2str(fb->pixel_format);
+		if (fb2) {
+			format_name = fourcc2str(fb2->pixel_format);
+			format = format_name ? format_name : "UNKNOWN";
+		} else {
+			format = bpp2str(bpp);
+		}
 
 		getcwd(cwd, sizeof(cwd));
 
@@ -275,23 +342,24 @@ static void dump_planes(struct device *dev)
 			dir = cwd;
 
 		sep = dir[0] && dir[strlen(dir) - 1] == '/' ? "" : "/";
-		if (fb->modifier) {
+		if (modifier) {
 			snprintf(path, sizeof(path), "%s%splane-%d-%dx%d-%s-%s.bin",
-				 dir, sep, ovr->plane_id, (fb->pitches[0] << 3) / bpp,
-				 fb->height, format_name,
-				 modifier_to_string(fb->modifier));
+				 dir, sep, ovr->plane_id, (pitch << 3) / bpp,
+				 height, format,
+				 modifier_to_string(modifier));
 		} else  {
 			snprintf(path, sizeof(path), "%s%splane-%d-%dx%d-%s.bin",
-				 dir, sep, ovr->plane_id, (fb->pitches[0] << 3) / bpp,
-				 fb->height, format_name);
+				 dir, sep, ovr->plane_id, (pitch << 3) / bpp,
+				 height, format);
 		}
 
 		dump_file = path;
-		write_fb_file((char *)data + fb->offsets[0], path, fb_size);
+		write_fb_file((char *)data + offset, path, fb_size);
 
 		munmap(data, map_size);
 		close(bo_fd);
-		drmModeFreeFB2(fb);
+		drmModeFreeFB2(fb2);
+		drmModeFreeFB(fb);
 		free(format_name);
 out_print:
 		print_plane_info(ovr, dump_file);
@@ -470,10 +538,11 @@ error:
 static void usage(char *name)
 {
 	fprintf(stderr, "Framebuffer dump tool by Andy, version: %s\n", VERSION);
-	fprintf(stderr, "usage: %s [-cdDM]\n", name);
+	fprintf(stderr, "usage: %s [-cdvDM]\n", name);
 
 	fprintf(stderr, "\t-c <crtc_id>\t dump framebuffer attached to this crtc, default dump all framebuffer\n");
 	fprintf(stderr, "\t-d <Directory>\t director to store the dumped file, default use the dir where you run fbdump\n");
+	fprintf(stderr, "\t-v <1|2>\t select GETFB API version, default use GETFB2\n");
 	fprintf(stderr, "\n Generic options:\n\n");
 	fprintf(stderr, "\t-M module\tuse the given driver\n");
 	fprintf(stderr, "\t-D device\tuse the given device\n");
@@ -481,7 +550,7 @@ static void usage(char *name)
 	exit(0);
 }
 
-static char optstr[] = "c:d:D:M:";
+static char optstr[] = "c:d:v:D:M:";
 
 int main(int argc, char **argv)
 {
@@ -495,6 +564,7 @@ int main(int argc, char **argv)
 	int ret;
 
 	memset(&dev, 0, sizeof dev);
+	dev.getfb_api = GETFB_API_2;
 
 	opterr = 0;
 	while ((c = getopt(argc, argv, optstr)) != -1) {
@@ -506,6 +576,14 @@ int main(int argc, char **argv)
 			break;
 		case 'd':
 			dev.dir = optarg;
+			break;
+		case 'v':
+			if (!strcmp(optarg, "1"))
+				dev.getfb_api = GETFB_API_1;
+			else if (!strcmp(optarg, "2"))
+				dev.getfb_api = GETFB_API_2;
+			else
+				usage(argv[0]);
 			break;
 		case 'D':
 			device = optarg;
