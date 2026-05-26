@@ -541,7 +541,7 @@ static void usage(char *name)
 	fprintf(stderr, "usage: %s [-cdvDM]\n", name);
 
 	fprintf(stderr, "\t-c <crtc_id>\t dump framebuffer attached to this crtc, default dump all framebuffer\n");
-	fprintf(stderr, "\t-d <Directory>\t director to store the dumped file, default use the dir where you run fbdump\n");
+	fprintf(stderr, "\t-d <Directory>\t director to store the dumped file, default use the dir where you run getfb\n");
 	fprintf(stderr, "\t-v <1|2>\t select GETFB API version, default use GETFB2\n");
 	fprintf(stderr, "\n Generic options:\n\n");
 	fprintf(stderr, "\t-M module\tuse the given driver\n");
