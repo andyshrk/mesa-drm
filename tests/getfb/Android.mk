@@ -5,7 +5,7 @@ include $(LOCAL_PATH)/Makefile.sources
 
 LOCAL_SRC_FILES := $(MODETEST_FILES)
 
-LOCAL_MODULE := fbdump_drm
+LOCAL_MODULE := getfb
 
 LOCAL_SHARED_LIBRARIES := libdrm
 LOCAL_STATIC_LIBRARIES := libdrm_util

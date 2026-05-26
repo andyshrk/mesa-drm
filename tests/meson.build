@@ -29,7 +29,7 @@ subdir('wbtest')
 subdir('ovltest')
 subdir('wb-util')
 subdir('cursor')
-subdir('fbdump')
+subdir('getfb')
 subdir('vbltest')
 subdir('event')
 if with_radeon
