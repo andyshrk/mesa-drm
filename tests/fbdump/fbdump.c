@@ -181,6 +181,14 @@ static void write_fb_file(char *buffer, const char *filename, size_t size)
 	write(fd, buffer, size);
 }
 
+static void print_plane_info(drmModePlane *ovr, const char *dump_file)
+{
+	printf("%d\t%d\t%d\t%d,%d\t\t%d,%d\t%-8d\t0x%08x\t%s\n",
+	       ovr->plane_id, ovr->crtc_id, ovr->fb_id,
+	       ovr->crtc_x, ovr->crtc_y, ovr->x, ovr->y,
+	       ovr->gamma_size, ovr->possible_crtcs, dump_file);
+}
+
 static void dump_planes(struct device *dev)
 {
 	drmModeFB2Ptr fb;
@@ -193,12 +201,13 @@ static void dump_planes(struct device *dev)
 	char path[PIC_NAME_MAX_LEN];
 	char cwd[PIC_NAME_MAX_LEN];
 	char *dir;
+	const char *sep;
 	char *format_name;
 	uint32_t bpp;
 
 
 	printf("Planes:\n");
-	printf("id\tcrtc\tfb\tCRTC x,y\tx,y\tgamma size\tpossible crtcs\n");
+	printf("id\tcrtc\tfb\tCRTC x,y\tx,y\tgamma size\tpossible crtcs\tdump file\n");
 
 	if (!dev->resources->plane_res)
 		return;
@@ -206,25 +215,22 @@ static void dump_planes(struct device *dev)
 	for (i = 0; i < dev->resources->plane_res->count_planes; i++) {
 		struct plane *plane = &dev->resources->planes[i];
 		drmModePlane *ovr = plane->plane;
+		const char *dump_file = "-";
+
 		if (!ovr)
 			continue;
 
-		printf("%d\t%d\t%d\t%d,%d\t\t%d,%d\t%-8d\t0x%08x\n",
-		       ovr->plane_id, ovr->crtc_id, ovr->fb_id,
-		       ovr->crtc_x, ovr->crtc_y, ovr->x, ovr->y,
-		       ovr->gamma_size, ovr->possible_crtcs);
-
 		if (!ovr->count_formats)
-			continue;
+			goto out_print;
 
 		if (!ovr->fb_id)
-			continue;
+			goto out_print;
 
 		fb = drmModeGetFB2(dev->fd, ovr->fb_id);
 		if (!fb) {
 			fprintf(stderr, "drmModeGetFB2 for fb: %d failed: %s\n",
 				ovr->fb_id, strerror(errno));
-			continue;
+			goto out_print;
 		}
 		bpp = drm_get_bpp(fb->pixel_format);
 		fb_size = (size_t)fb->pitches[0] * fb->height;
@@ -248,7 +254,7 @@ static void dump_planes(struct device *dev)
 		if (drmPrimeHandleToFD(dev->fd, fb->handles[0], 0, &bo_fd)) {
 			fprintf(stderr, "Failed to get fb fd: %s\n", strerror(errno));
 			drmModeFreeFB2(fb);
-			continue;
+			goto out_print;
 		}
 
 		data = mmap(NULL, map_size, PROT_READ, MAP_SHARED, bo_fd, 0);
@@ -256,7 +262,7 @@ static void dump_planes(struct device *dev)
 			fprintf(stderr, "Failed to mmap: %s\n", strerror(errno));
 			close(bo_fd);
 			drmModeFreeFB2(fb);
-			continue;
+			goto out_print;
 		}
 
 		format_name = fourcc2str(fb->pixel_format);
@@ -268,23 +274,27 @@ static void dump_planes(struct device *dev)
 		else
 			dir = cwd;
 
+		sep = dir[0] && dir[strlen(dir) - 1] == '/' ? "" : "/";
 		if (fb->modifier) {
-			snprintf(path, sizeof(path), "%s/plane-%d-%dx%d-%s-%s.bin",
-				 dir, ovr->plane_id, (fb->pitches[0] << 3) / bpp,
+			snprintf(path, sizeof(path), "%s%splane-%d-%dx%d-%s-%s.bin",
+				 dir, sep, ovr->plane_id, (fb->pitches[0] << 3) / bpp,
 				 fb->height, format_name,
 				 modifier_to_string(fb->modifier));
 		} else  {
-			snprintf(path, sizeof(path), "%s/plane-%d-%dx%d-%s.bin",
-				 dir, ovr->plane_id, (fb->pitches[0] << 3) / bpp,
+			snprintf(path, sizeof(path), "%s%splane-%d-%dx%d-%s.bin",
+				 dir, sep, ovr->plane_id, (fb->pitches[0] << 3) / bpp,
 				 fb->height, format_name);
 		}
 
+		dump_file = path;
 		write_fb_file((char *)data + fb->offsets[0], path, fb_size);
 
 		munmap(data, map_size);
 		close(bo_fd);
 		drmModeFreeFB2(fb);
 		free(format_name);
+out_print:
+		print_plane_info(ovr, dump_file);
 	}
 
 	printf("\n");
