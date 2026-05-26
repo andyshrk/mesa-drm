@@ -168,7 +168,7 @@ static char *fourcc2str(uint32_t fourcc)
 	return name;
 }
 
-static void write_fb_file(char *buffer, const char *filename, int size)
+static void write_fb_file(char *buffer, const char *filename, size_t size)
 {
 	int fd;
 
@@ -201,8 +201,9 @@ static void dump_planes(struct device *dev)
 {
 	drmModeFB2Ptr fb;
 	__s32 fb_fd;
-	unsigned int fb_size = 0;
-	unsigned int afbc_size = 0;
+	size_t fb_size = 0;
+	size_t map_size = 0;
+	size_t afbc_size = 0;
 	unsigned int i;
 	void *data;
 	char path[PIC_NAME_MAX_LEN];
@@ -242,7 +243,7 @@ static void dump_planes(struct device *dev)
 			continue;
 		}
 		bpp = drm_get_bpp(fb->pixel_format);
-		fb_size = fb->pitches[0] * fb->height;
+		fb_size = (size_t)fb->pitches[0] * fb->height;
 		if (drm_is_afbc(fb->modifier)) {
 			afbc_size = drm_gem_afbc_min_size(fb->pixel_format, fb->width, fb->height, fb->modifier);
 			/*
@@ -258,15 +259,20 @@ static void dump_planes(struct device *dev)
 
 		if (afbc_size > fb_size)
 			fb_size = afbc_size;
+		/* The framebuffer pixels start at offsets[0] inside the BO. */
+		map_size = fb->offsets[0] + fb_size;
 		fb_fd = fb_handle_to_fd(dev->fd, fb->handles[0]);
 		if (fb_fd < 0) {
 			fprintf(stderr, "Failed to get fb fd: %s\n", strerror(errno));
+			drmModeFreeFB2(fb);
 			continue;
 		}
 
-		data = mmap(NULL, fb_size, PROT_READ, MAP_SHARED, fb_fd, 0);
+		data = mmap(NULL, map_size, PROT_READ, MAP_SHARED, fb_fd, 0);
 		if (data == MAP_FAILED) {
 			fprintf(stderr, "Failed to mmap: %s\n", strerror(errno));
+			close(fb_fd);
+			drmModeFreeFB2(fb);
 			continue;
 		}
 
@@ -290,8 +296,10 @@ static void dump_planes(struct device *dev)
 				 fb->height, format_name);
 		}
 
-		write_fb_file(data, path, fb_size);
+		write_fb_file((char *)data + fb->offsets[0], path, fb_size);
 
+		munmap(data, map_size);
+		close(fb_fd);
 		drmModeFreeFB2(fb);
 		free(format_name);
 	}
