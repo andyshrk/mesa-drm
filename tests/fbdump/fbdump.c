@@ -181,26 +181,10 @@ static void write_fb_file(char *buffer, const char *filename, size_t size)
 	write(fd, buffer, size);
 }
 
-static int fb_handle_to_fd(int drm_fd, int handle)
-{
-	struct drm_prime_handle args;
-	int ret;
-
-	memset(&args, 0, sizeof(args));
-	args.fd = -1;
-	args.handle = handle;
-
-	ret = drmIoctl(drm_fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &args);
-	if (ret)
-		return ret;
-
-	return args.fd;
-}
-
 static void dump_planes(struct device *dev)
 {
 	drmModeFB2Ptr fb;
-	__s32 fb_fd;
+	int bo_fd;
 	size_t fb_size = 0;
 	size_t map_size = 0;
 	size_t afbc_size = 0;
@@ -261,17 +245,16 @@ static void dump_planes(struct device *dev)
 			fb_size = afbc_size;
 		/* The framebuffer pixels start at offsets[0] inside the BO. */
 		map_size = fb->offsets[0] + fb_size;
-		fb_fd = fb_handle_to_fd(dev->fd, fb->handles[0]);
-		if (fb_fd < 0) {
+		if (drmPrimeHandleToFD(dev->fd, fb->handles[0], 0, &bo_fd)) {
 			fprintf(stderr, "Failed to get fb fd: %s\n", strerror(errno));
 			drmModeFreeFB2(fb);
 			continue;
 		}
 
-		data = mmap(NULL, map_size, PROT_READ, MAP_SHARED, fb_fd, 0);
+		data = mmap(NULL, map_size, PROT_READ, MAP_SHARED, bo_fd, 0);
 		if (data == MAP_FAILED) {
 			fprintf(stderr, "Failed to mmap: %s\n", strerror(errno));
-			close(fb_fd);
+			close(bo_fd);
 			drmModeFreeFB2(fb);
 			continue;
 		}
@@ -299,7 +282,7 @@ static void dump_planes(struct device *dev)
 		write_fb_file((char *)data + fb->offsets[0], path, fb_size);
 
 		munmap(data, map_size);
-		close(fb_fd);
+		close(bo_fd);
 		drmModeFreeFB2(fb);
 		free(format_name);
 	}
