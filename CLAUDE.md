@@ -54,7 +54,7 @@ Test programs:
 - `modeprint/` - Print DRM mode information
 - `cursor/` - Cursor testing
 - `wbtest/` - Writeback testing with AFBC/RFBC support
-- `fbdump/` - Framebuffer dump utility (`fbdump_drm`) with AFBC support, includes split/sparse flags in filename
+- `getfb/` - Framebuffer dump utility (`getfb`) with AFBC support, includes split/sparse flags in filename
 - `fps/` - FPS measurement (supports DRM lease)
 - `vbltest/` - VBlank testing
 - `event/` - DRM event handling
@@ -67,7 +67,7 @@ Running individual test programs:
 ./Sbuild64/tests/modetest/modetest
 ./Sbuild64/tests/ovltest/ovltest
 ./Sbuild64/tests/proptest/proptest
-./Sbuild64/tests/fbdump/fbdump_drm
+./Sbuild64/tests/getfb/getfb
 ```
 
 Note: Most test programs are statically linked (`-static` linker flag) for easier deployment to target devices.
@@ -83,7 +83,7 @@ This codebase has extensive customization for AFBC (Arm Frame Buffer Compression
 - Custom fourcc formats in `include/drm/drm_fourcc.h` (YUV420_8BIT, YUV420_10BIT, DRM_FORMAT_YUYV, DRM_FORMAT_VUY888)
 - AFBC buffer utilities in `tests/util/format.c`
 - Test resources in `res/` directory for AFBC testing
-- `fbdump` and `ovltest` support AFBC-specific features like split and sparse flags
+- `getfb` and `ovltest` support AFBC-specific features like split and sparse flags
 - Identification of non-linear/compressed(AFBC/RFBC/TILE) formats in DRM programming: DRM_FORMAT_xxx + modifier.
   When allocate for a framebuffer, these two parameters must be passed to either drmModeAddFB2WithModifiers or drmModeAddFB2, depending on whether the requested format is compressed/TILE or non-compressed.
 
@@ -121,4 +121,3 @@ This codebase also supports Android build via `Android.bp` and `Android.sources.
 
 - When working with APIs provided by libdrm, if the exact behavior of an API is unclear, refer to its implementation code. If you encounter ioctl-related calls within that implementation, consult the @../linux source code to further analyze the behavior of the ioctl.
 - Always use the -s option when making git commits
-- Do not use the Co-Authored-By tag when making git cmmits.
