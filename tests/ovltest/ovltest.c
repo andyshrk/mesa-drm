@@ -1923,6 +1923,10 @@ static int parse_plane(struct plane_arg *plane, const char *p)
 			plane->afbc_en = true;
 			plane->block_w = 32;
 			plane->afbc_sparse_en = true;
+		} else if (strstr(end + 5, "@afbc32x8split")) {
+			plane->afbc_en = true;
+			plane->block_w = 32;
+			plane->afbc_split_en = true;
 		} else if (strstr(end + 5, "@afbc32x8")) {
 			plane->afbc_en = true;
 			plane->block_w = 32;
