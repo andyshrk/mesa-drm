@@ -812,6 +812,7 @@ struct pipe_arg {
 
 	/* AFBC format options for writeback connector */
 	bool afbc_en;
+	bool afbc_ytr_en;
 	bool afbc_split_en;
 	bool afbc_sparse_en;
 	bool rfbc_en;  /* RFBC modifier support */
@@ -852,6 +853,18 @@ struct plane_arg {
 	struct bo *old_bo;
 	char format_str[5]; /* need to leave room for terminating \0 */
 	unsigned int fourcc;
+};
+
+struct fbc_format {
+	bool afbc_en;
+	bool rfbc_en;
+	bool tiled_en;
+	bool afbc_ytr_en;
+	bool afbc_split_en;
+	bool afbc_sparse_en;
+	uint32_t tile_mode;
+	uint32_t block_w;
+	uint32_t block_h;
 };
 
 struct error_event {
@@ -1431,6 +1444,8 @@ static int atomic_add_wbc_fb(struct device *dev, struct pipe_arg *pipe)
 		if (pipe->afbc_en) {
 			if (pipe->block_w == 32)
 				modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_32x8);
+			else if (pipe->afbc_ytr_en && pipe->block_w == 16)
+				modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC(1 | AFBC_FORMAT_MOD_YTR);
 			else if (pipe->block_w == 16)
 				modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC(1);
 			else if (pipe->block_w == 64)
@@ -1724,12 +1739,74 @@ static void atomic_clear_mode(struct device *dev, struct pipe_arg *pipes, unsign
 
 #define min(a, b)	((a) < (b) ? (a) : (b))
 
+static void parse_format_options(struct fbc_format *format, const char *p,
+				 bool parse_tile)
+{
+	if (strstr(p, "@afbc16x16")) {
+		format->afbc_en = true;
+		format->block_w = 16;
+		format->block_h = 16;
+	} else if (strstr(p, "@afbc32x8sparse")) {
+		format->afbc_en = true;
+		format->afbc_sparse_en = true;
+		format->block_w = 32;
+		format->block_h = 8;
+	} else if (strstr(p, "@afbc32x8split")) {
+		format->afbc_en = true;
+		format->afbc_split_en = true;
+		format->block_w = 32;
+		format->block_h = 8;
+	} else if (strstr(p, "@afbc32x8")) {
+		format->afbc_en = true;
+		format->block_w = 32;
+		format->block_h = 8;
+	} else if (strstr(p, "@afbc64x4")) {
+		format->afbc_en = true;
+		format->block_w = 64;
+		format->block_h = 4;
+	} else if (strstr(p, "@afbcsplitsparse")) {
+		format->afbc_en = true;
+		format->afbc_split_en = true;
+		format->afbc_sparse_en = true;
+		format->block_w = 16;
+		format->block_h = 16;
+	} else if (strstr(p, "@afbcsplit")) {
+		format->afbc_en = true;
+		format->afbc_split_en = true;
+		format->block_w = 16;
+		format->block_h = 16;
+	} else if (strstr(p, "@afbcytr")) {
+		format->afbc_en = true;
+		format->afbc_ytr_en = true;
+		format->block_w = 16;
+		format->block_h = 16;
+	} else if (strstr(p, "@afbc")) {
+		format->afbc_en = true;
+		format->block_w = 16;
+		format->block_h = 16;
+	} else if (parse_tile && strstr(p, "@tile4x4m0")) {
+		format->tiled_en = true;
+		format->tile_mode = 2;
+	} else if (parse_tile && strstr(p, "@tile4x4m1")) {
+		format->tiled_en = true;
+		format->tile_mode = 3;
+	} else if (parse_tile && strstr(p, "@tile")) {
+		format->tiled_en = true;
+		format->tile_mode = 1;
+	} else if (strstr(p, "@rfbc64x4")) {
+		format->rfbc_en = true;
+		format->block_w = 64;
+		format->block_h = 4;
+	}
+}
+
 static int parse_connector(struct pipe_arg *pipe, const char *arg)
 {
 	unsigned int len;
 	unsigned int i;
 	const char *p;
 	char *endp;
+	struct fbc_format format = {0};
 
 	pipe->vrefresh = 0;
 	pipe->crtc_id = (uint32_t)-1;
@@ -1789,59 +1866,14 @@ static int parse_connector(struct pipe_arg *pipe, const char *arg)
 	if (*p == '@') {
 		strncpy(pipe->format_str, p + 1, 4);
 		pipe->format_str[4] = '\0';
-		/* Parse AFBC format options for writeback connector */
-		if (strstr(p, "@afbc16x16")) {
-			pipe->afbc_en = true;
-			pipe->block_w = 16;
-			pipe->block_h = 16;
-		} else if (strstr(p, "@afbc32x8sparse")) {
-			pipe->afbc_en = true;
-			pipe->block_w = 32;
-			pipe->block_h = 8;
-			pipe->afbc_sparse_en = true;
-		} else if (strstr(p, "@afbc32x8split")) {
-			pipe->afbc_en = true;
-			pipe->block_w = 32;
-			pipe->block_h = 8;
-			pipe->afbc_split_en = true;
-		} else if (strstr(p, "@afbc32x8")) {
-			pipe->afbc_en = true;
-			pipe->block_w = 32;
-			pipe->block_h = 8;
-		} else if (strstr(p, "@afbc64x4")) {
-			pipe->afbc_en = true;
-			pipe->block_w = 64;
-			pipe->block_h = 4;
-		} else if (strstr(p, "@afbcsplitsparse")) {
-			pipe->afbc_en = true;
-			pipe->afbc_split_en = true;
-			pipe->afbc_sparse_en = true;
-			pipe->block_w = 16;
-			pipe->block_h = 16;
-		} else if (strstr(p, "@afbcsplit")) {
-			pipe->afbc_en = true;
-			pipe->afbc_split_en = true;
-			pipe->block_w = 16;
-			pipe->block_h = 16;
-		} else if (strstr(p, "@afbc")) {
-			pipe->afbc_en = true;
-			pipe->block_w = 16;
-			pipe->block_h = 16;
-		} else if (strstr(p, "@afbc")) {
-			pipe->afbc_en = true;
-			pipe->block_w = 16;
-			pipe->block_h = 16;
-		} else if (strstr(p, "@rfbc64x4")) {
-			pipe->rfbc_en = true;
-			pipe->block_w = 64;
-			pipe->block_h = 4;
-		} else {
-			pipe->afbc_en = false;
-			pipe->block_w = 0;
-			pipe->block_h = 0;
-			pipe->afbc_split_en = false;
-			pipe->afbc_sparse_en = false;
-		}
+		parse_format_options(&format, p, false);
+		pipe->afbc_en = format.afbc_en;
+		pipe->afbc_ytr_en = format.afbc_ytr_en;
+		pipe->afbc_split_en = format.afbc_split_en;
+		pipe->afbc_sparse_en = format.afbc_sparse_en;
+		pipe->rfbc_en = format.rfbc_en;
+		pipe->block_w = format.block_w;
+		pipe->block_h = format.block_h;
 	}
 
 	pipe->fourcc = util_format_fourcc(pipe->format_str);
@@ -1856,6 +1888,7 @@ static int parse_connector(struct pipe_arg *pipe, const char *arg)
 static int parse_plane(struct plane_arg *plane, const char *p)
 {
 	char *end;
+	struct fbc_format format = {0};
 
 	plane->plane_id = strtoul(p, &end, 10);
 	if (*end != '@')
@@ -1919,48 +1952,16 @@ static int parse_plane(struct plane_arg *plane, const char *p)
 	if (*end == '@') {
 		strncpy(plane->format_str, end + 1, 4);
 		plane->format_str[4] = '\0';
-		if (strstr(end + 5, "@afbc32x8sparse")) {
-			plane->afbc_en = true;
-			plane->block_w = 32;
-			plane->afbc_sparse_en = true;
-		} else if (strstr(end + 5, "@afbc32x8split")) {
-			plane->afbc_en = true;
-			plane->block_w = 32;
-			plane->afbc_split_en = true;
-		} else if (strstr(end + 5, "@afbc32x8")) {
-			plane->afbc_en = true;
-			plane->block_w = 32;
-		} else if(strstr(end + 5, "afbcsplitsparse")) {
-			plane->afbc_en = true;
-			plane->block_w = 16;
-			plane->afbc_split_en = true;
-			plane->afbc_sparse_en = true;
-		} else if(strstr(end + 5, "afbcsplit")) {
-			plane->afbc_en = true;
-			plane->block_w = 16;
-			plane->afbc_split_en = true;
-		}else if (strstr(end + 5, "@afbcytr")) {
-			plane->afbc_en = true;
-			plane->afbc_ytr_en = true;
-			plane->block_w = 16;
-		} else if (strstr(end + 5, "@afbc")) {
-			plane->afbc_en = true;
-			plane->block_w = 16;
-			plane->tile_mode = 0;
-		} else if (strstr(end + 5, "@tile4x4m0")) {
-			plane->tiled_en = true;
-			plane->tile_mode = 2;  /* 4x4_MODE0 */
-		} else if (strstr(end + 5, "@tile4x4m1")) {
-			plane->tiled_en = true;
-			plane->tile_mode = 3;  /* 4x4_MODE1 */
-		} else if (strstr(end + 5, "@tile")) {
-			plane->tiled_en = true;
-			plane->tile_mode = 1;  /* 8x8 by default */
-		} else if (strstr(end + 5, "@rfbc64x4")) {
-			plane->rfbc_en = true;
-			plane->block_w = 64;
-			plane->block_h = 4;
-		}
+		parse_format_options(&format, end + 5, true);
+		plane->afbc_en = format.afbc_en;
+		plane->afbc_ytr_en = format.afbc_ytr_en;
+		plane->afbc_split_en = format.afbc_split_en;
+		plane->afbc_sparse_en = format.afbc_sparse_en;
+		plane->tiled_en = format.tiled_en;
+		plane->rfbc_en = format.rfbc_en;
+		plane->tile_mode = format.tile_mode;
+		plane->block_w = format.block_w;
+		plane->block_h = format.block_h;
 
 	} else {
 		strcpy(plane->format_str, "XR24");
