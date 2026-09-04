@@ -837,6 +837,9 @@ struct plane_arg {
 	bool afbc_sparse_en;
 	bool tiled_en;
 	bool rfbc_en;  /* RFBC modifier support */
+	bool afrc_en;  /* AFRC modifier support */
+	bool afrc_scan;  /* AFRC scanline layout, otherwise rotation-optimised */
+	uint32_t afrc_cu_size;  /* AFRC coding unit size: 16, 24 or 32 bytes */
 	uint32_t tile_mode;  /* 0=8x8, 2=4x4_MODE0, 3=4x4_MODE1 */
 	uint32_t block_h;  /* 8=16x8, 16=16x16, 32=32x16, 4=64x4 */
 	uint32_t block_w;
@@ -859,6 +862,9 @@ struct fbc_format {
 	bool afbc_en;
 	bool rfbc_en;
 	bool tiled_en;
+	bool afrc_en;
+	bool afrc_scan;
+	uint32_t afrc_cu_size;
 	bool afbc_ytr_en;
 	bool afbc_split_en;
 	bool afbc_sparse_en;
@@ -1257,14 +1263,27 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p, const char 
 		if (plane_bo == NULL)
 			return -1;
 
-		if (p->afbc_en || p->tiled_en || p->rfbc_en) {
+		if (p->afbc_en || p->tiled_en || p->rfbc_en || p->afrc_en) {
+			uint64_t afrc_cu_size;
+
 			if (p->afbc_en && p->block_w == 32)
 				modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_32x8);
 			else if (p->afbc_en && p->afbc_ytr_en && p->block_w == 16)
 				modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC( 1 | AFBC_FORMAT_MOD_YTR);
 			else if (p->afbc_en && p->block_w == 16)
 				modifiers[0] = DRM_FORMAT_MOD_ARM_AFBC(1);
-			else if (p->tiled_en) {
+			else if (p->afrc_en) {
+				if (p->afrc_cu_size == 32)
+					afrc_cu_size = AFRC_FORMAT_MOD_CU_SIZE_32;
+				else if (p->afrc_cu_size == 24)
+					afrc_cu_size = AFRC_FORMAT_MOD_CU_SIZE_24;
+				else
+					afrc_cu_size = AFRC_FORMAT_MOD_CU_SIZE_16;
+
+				modifiers[0] = DRM_FORMAT_MOD_ARM_AFRC(AFRC_FORMAT_MOD_CU_SIZE_P0(afrc_cu_size));
+				if (p->afrc_scan)
+					modifiers[0] |= AFRC_FORMAT_MOD_LAYOUT_SCAN;
+			} else if (p->tiled_en) {
 				if (p->tile_mode == 2)
 					modifiers[0] = DRM_FORMAT_MOD_ROCKCHIP_TILED(ROCKCHIP_TILED_BLOCK_SIZE_4x4_MODE0);
 				else
@@ -1797,6 +1816,27 @@ static void parse_format_options(struct fbc_format *format, const char *p,
 		format->rfbc_en = true;
 		format->block_w = 64;
 		format->block_h = 4;
+	} else if (parse_tile && strstr(p, "@afrc16scan")) {
+		format->afrc_en = true;
+		format->afrc_scan = true;
+		format->afrc_cu_size = 16;
+	} else if (parse_tile && strstr(p, "@afrc24scan")) {
+		format->afrc_en = true;
+		format->afrc_scan = true;
+		format->afrc_cu_size = 24;
+	} else if (parse_tile && strstr(p, "@afrc32scan")) {
+		format->afrc_en = true;
+		format->afrc_scan = true;
+		format->afrc_cu_size = 32;
+	} else if (parse_tile && strstr(p, "@afrc16")) {
+		format->afrc_en = true;
+		format->afrc_cu_size = 16;
+	} else if (parse_tile && strstr(p, "@afrc24")) {
+		format->afrc_en = true;
+		format->afrc_cu_size = 24;
+	} else if (parse_tile && strstr(p, "@afrc32")) {
+		format->afrc_en = true;
+		format->afrc_cu_size = 32;
 	}
 }
 
@@ -1959,6 +1999,9 @@ static int parse_plane(struct plane_arg *plane, const char *p)
 		plane->afbc_sparse_en = format.afbc_sparse_en;
 		plane->tiled_en = format.tiled_en;
 		plane->rfbc_en = format.rfbc_en;
+		plane->afrc_en = format.afrc_en;
+		plane->afrc_scan = format.afrc_scan;
+		plane->afrc_cu_size = format.afrc_cu_size;
 		plane->tile_mode = format.tile_mode;
 		plane->block_w = format.block_w;
 		plane->block_h = format.block_h;
@@ -2028,7 +2071,7 @@ static void usage(char *name)
 
 
 	fprintf(stderr, "\n Test options:\n\n");
-	fprintf(stderr, "\t-P <plane_id>@<crtc_id>:<w>x<h>[:<crtc_w>x<crtc_h>][@stride:vir_w][+<x>+<y>][*<scale>][@<format>][@afbc][@afbc16x16][@afbc32x8][@afbc64x4][@afbcsplit][@afbcytr][@tile][@tile4x4][@rfbc64x4][@rotatex/y/90/270]\tset a plane\n");
+	fprintf(stderr, "\t-P <plane_id>@<crtc_id>:<w>x<h>[:<crtc_w>x<crtc_h>][@stride:vir_w][+<x>+<y>][*<scale>][@<format>][@afbc][@afbc16x16][@afbc32x8][@afbc64x4][@afbcsplit][@afbcytr][@tile][@tile4x4][@rfbc64x4][@afrc16/24/32][@afrc16/24/32scan][@rotatex/y/90/270]\tset a plane\n");
 	fprintf(stderr, "\t-s <connector_id>[,<connector_id>][@<crtc_id>]:[#<mode index>]<mode>[-<vrefresh>][@<format>][@afbc][@afbc16x16][@afbc32x8][@afbc64x4][@afbcsplit][@afbcytr][@rfbc64x4]\tset a mode\n");
 	fprintf(stderr, "\t-C\ttest hw cursor\n");
 	fprintf(stderr, "\t-v\ttest vsynced page flipping\n");
