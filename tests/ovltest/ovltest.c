@@ -1187,7 +1187,7 @@ static bool set_property(struct device *dev, struct property_arg *p)
 		if (!p->optional)
 			fprintf(stderr, "%s %i has no %s property\n",
 				obj_type, p->obj_id, p->name);
-		return false;
+		return p->optional;
 	}
 
 	p->prop_id = props->props[i];
@@ -1198,23 +1198,39 @@ static bool set_property(struct device *dev, struct property_arg *p)
 	else
 		ret = drmModeAtomicAddProperty(dev->req, p->obj_id, p->prop_id, p->value);
 
-	if (ret < 0)
+	if (ret < 0) {
 		fprintf(stderr, "failed to set %s %i property %s to %" PRIu64 ": %s\n",
-			obj_type, p->obj_id, p->name, p->value, strerror(errno));
+			obj_type, p->obj_id, p->name, p->value, dev->use_atomic ? strerror(-ret) : strerror(errno));
+		return false;
+	}
 
 	return true;
 }
 
-static void add_property(struct device *dev, uint32_t obj_id,
-			       const char *name, uint64_t value)
+static int add_property(struct device *dev, uint32_t obj_id, const char *name, uint64_t value)
 {
-	struct property_arg p;
+	struct property_arg property = {
+		.obj_id = obj_id,
+		.value = value,
+	};
 
-	p.obj_id = obj_id;
-	strcpy(p.name, name);
-	p.value = value;
+	strcpy(property.name, name);
 
-	set_property(dev, &p);
+	return set_property(dev, &property) ? 0 : -EINVAL;
+}
+
+static int add_property_optional(struct device *dev, uint32_t obj_id,
+				 const char *name, uint64_t value)
+{
+	struct property_arg property = {
+		.obj_id = obj_id,
+		.value = value,
+		.optional = true,
+	};
+
+	strcpy(property.name, name);
+
+	return set_property(dev, &property) ? 0 : -EINVAL;
 }
 
 static int get_plane_num(unsigned int format)
@@ -1325,6 +1341,7 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p, const char 
 
 		if (ret) {
 			fprintf(stderr, "failed to add fb: %s\n", strerror(errno));
+			bo_destroy(plane_bo);
 			return -1;
 		}
 	}
@@ -1357,20 +1374,36 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p, const char 
 		crtc_y = p->y;
 	}
 
-	add_property(dev, p->plane_id, "FB_ID", p->fb_id);
-	add_property(dev, p->plane_id, "CRTC_ID", p->crtc_id);
-	add_property(dev, p->plane_id, "SRC_X", 0);
-	add_property(dev, p->plane_id, "SRC_Y", 0);
-	add_property(dev, p->plane_id, "SRC_W", p->w << 16);
-	add_property(dev, p->plane_id, "SRC_H", p->h << 16);
-	add_property(dev, p->plane_id, "CRTC_X", crtc_x);
-	add_property(dev, p->plane_id, "CRTC_Y", crtc_y);
-	add_property(dev, p->plane_id, "CRTC_W", crtc_w);
-	add_property(dev, p->plane_id, "CRTC_H", crtc_h);
-	add_property(dev, p->plane_id, "rotation", p->rotation);
-	add_property(dev, p->plane_id, "zpos", p->zpos);
+	ret = add_property(dev, p->plane_id, "FB_ID", p->fb_id);
+	if (!ret)
+		ret = add_property(dev, p->plane_id, "CRTC_ID", p->crtc_id);
+	if (!ret)
+		ret = add_property(dev, p->plane_id, "SRC_X", 0);
+	if (!ret)
+		ret = add_property(dev, p->plane_id, "SRC_Y", 0);
+	if (!ret)
+		ret = add_property(dev, p->plane_id, "SRC_W", p->w << 16);
+	if (!ret)
+		ret = add_property(dev, p->plane_id, "SRC_H", p->h << 16);
+	if (!ret)
+		ret = add_property(dev, p->plane_id, "CRTC_X", crtc_x);
+	if (!ret)
+		ret = add_property(dev, p->plane_id, "CRTC_Y", crtc_y);
+	if (!ret)
+		ret = add_property(dev, p->plane_id, "CRTC_W", crtc_w);
+	if (!ret)
+		ret = add_property(dev, p->plane_id, "CRTC_H", crtc_h);
+	if (!ret) {
+		/* Default rotation is valid even without a rotation property. */
+		if (p->rotation == DRM_MODE_ROTATE_0)
+			ret = add_property_optional(dev, p->plane_id, "rotation", p->rotation);
+		else
+			ret = add_property(dev, p->plane_id, "rotation", p->rotation);
+	}
+	if (!ret)
+		ret = add_property_optional(dev, p->plane_id, "zpos", p->zpos);
 
-	return 0;
+	return ret;
 }
 
 static int atomic_set_planes(struct device *dev, struct plane_arg *p,
@@ -1509,6 +1542,7 @@ static int atomic_add_wbc_fb(struct device *dev, struct pipe_arg *pipe)
 
 		if (ret) {
 			fprintf(stderr, "failed to add fb: %s\n", strerror(errno));
+			bo_destroy(pipe_bo);
 			return -1;
 		}
 		pipe->bo = pipe_bo;
@@ -1721,7 +1755,10 @@ static int atomic_set_mode(struct device *dev, struct pipe_arg *pipes, unsigned 
 				printf("writeback connector %s, ", pipe->cons[j]);
 			else
 				printf("%s, ", pipe->cons[j]);
-			add_property(dev, pipe->con_ids[j], "CRTC_ID", pipe->crtc->crtc->crtc_id);
+			ret = add_property(dev, pipe->con_ids[j], "CRTC_ID",
+					   pipe->crtc->crtc->crtc_id);
+			if (ret)
+				return ret;
 		}
 		printf("crtc %d\n", pipe->crtc->crtc->crtc_id);
 		if (pipe->wbc) {
@@ -1732,11 +1769,16 @@ static int atomic_set_mode(struct device *dev, struct pipe_arg *pipes, unsigned 
 			}
 			printf("write back %d x %d to fb_id :%d\n",
 			       pipe->mode->hdisplay, pipe->mode->vdisplay, pipe->fb_id);
-			add_property(dev, pipe->con_ids[0], "WRITEBACK_FB_ID", pipe->fb_id);
+			ret = add_property(dev, pipe->con_ids[0], "WRITEBACK_FB_ID", pipe->fb_id);
+			if (ret)
+				return ret;
 		} else {
 			drmModeCreatePropertyBlob(dev->fd, pipe->mode, sizeof(*pipe->mode), &blob_id);
-			add_property(dev, pipe->crtc->crtc->crtc_id, "MODE_ID", blob_id);
-			add_property(dev, pipe->crtc->crtc->crtc_id, "ACTIVE", 1);
+			ret = add_property(dev, pipe->crtc->crtc->crtc_id, "MODE_ID", blob_id);
+			if (!ret)
+				ret = add_property(dev, pipe->crtc->crtc->crtc_id, "ACTIVE", 1);
+			if (ret)
+				return ret;
 		}
 	}
 
