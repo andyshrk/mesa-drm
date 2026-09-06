@@ -20,7 +20,7 @@
 
 modetest = executable(
   'ovltest',
-  files('bo.c', 'ovltest.c'),
+  files('bo.c', 'ovltest.c', 'ovltest_script.c'),
   c_args : [libdrm_c_args, '-Wno-pointer-arith'],
   include_directories : [inc_root, inc_tests, inc_drm],
   dependencies : [dep_threads, dep_cairo],
@@ -38,3 +38,11 @@ ovltest_state_test = executable(
   link_with : [libdrm, libutil],
 )
 test('ovltest-state', ovltest_state_test, timeout : 10)
+
+ovltest_script_test = executable(
+  'ovltest-script-test',
+  files('ovltest_script.c', 'ovltest_script_test.c'),
+  c_args : libdrm_c_args,
+)
+
+test('ovltest-script', ovltest_script_test)

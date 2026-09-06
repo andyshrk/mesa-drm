@@ -1,4 +1,6 @@
 MODETEST_FILES := \
 	bo.c \
 	bo.h \
+	ovltest_script.c \
+	ovltest_script.h \
 	ovltest.c
