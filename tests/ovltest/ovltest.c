@@ -72,16 +72,6 @@
 #define PIC_NAME_MAX_LEN	256
 #define PIC_MAX_CNT		8
 
-/*
- * raw rgb/yuv data file name:
- * widthxheight_format.bin: 720x1280_ARGB8888.bin
- *
- */
-char pic_name[PIC_MAX_CNT][PIC_NAME_MAX_LEN];
-
-static unsigned int pic_cnt;
-static unsigned int zpos;
-
 struct crtc {
 	drmModeCrtc *crtc;
 	drmModeObjectProperties *props;
@@ -1120,6 +1110,31 @@ struct property_arg {
 	bool optional;
 };
 
+struct test_state {
+	int encoders;
+	int connectors;
+	int crtcs;
+	int planes;
+	int framebuffers;
+	int drop_master;
+	int test_vsync;
+	int use_atomic;
+	int dynamic_onoff;
+	bool one_shot;
+	bool error_monitor;
+	char *device;
+	char *module;
+	struct pipe_arg *pipes;
+	unsigned int pipe_count;
+	struct plane_arg *plane_args;
+	unsigned int plane_count;
+	struct property_arg *properties;
+	unsigned int property_count;
+	char pictures[PIC_MAX_CNT][PIC_NAME_MAX_LEN];
+	unsigned int picture_count;
+	unsigned int zpos;
+};
+
 static bool set_property(struct device *dev, struct property_arg *p)
 {
 	drmModeObjectProperties *props = NULL;
@@ -1359,17 +1374,18 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p, const char 
 }
 
 static int atomic_set_planes(struct device *dev, struct plane_arg *p,
-			      unsigned int count, bool update)
+			     unsigned int count, const char pictures[PIC_MAX_CNT][PIC_NAME_MAX_LEN],
+			     unsigned int picture_count, bool update)
 {
 	unsigned int i;
 	int ret;
 
 	/* set up planes */
-	if (count > pic_cnt)
+	if (count > picture_count)
 		fprintf(stderr, "no enough picture data for %d planes\n", count);
 
 	for (i = 0; i < count; i++) {
-		ret = atomic_set_plane(dev, &p[i], pic_name[i], update);
+		ret = atomic_set_plane(dev, &p[i], pictures[i], update);
 		if (ret < 0) {
 			fprintf(stderr, "failed to set plane %d\n", i);
 			return ret;
@@ -1925,7 +1941,7 @@ static int parse_connector(struct pipe_arg *pipe, const char *arg)
 	return 0;
 }
 
-static int parse_plane(struct plane_arg *plane, const char *p)
+static int parse_plane(struct plane_arg *plane, const char *p, unsigned int *zpos)
 {
 	char *end;
 	struct fbc_format format = {0};
@@ -2021,7 +2037,7 @@ static int parse_plane(struct plane_arg *plane, const char *p)
 	else
 		plane->rotation |= DRM_MODE_ROTATE_0;
 
-	plane->zpos = zpos++;
+	plane->zpos = (*zpos)++;
 
 	plane->fourcc = util_format_fourcc(plane->format_str);
 	if (plane->fourcc == 0) {
@@ -2043,19 +2059,164 @@ static int parse_property(struct property_arg *p, const char *arg)
 	return 0;
 }
 
-static void parse_pictures(char *arg)
+static int parse_pictures(struct test_state *state, const char *arg)
 {
-	char *name = strtok(arg, ",");
+	char *copy;
+	char *saveptr = NULL;
+	char *name;
+
+	copy = strdup(arg);
+	if (!copy)
+		return -ENOMEM;
+
+	name = strtok_r(copy, ",", &saveptr);
 
 	while (name) {
-		strcpy(pic_name[pic_cnt], name);
-		if ((++pic_cnt) >= PIC_MAX_CNT) {
+		if (state->picture_count >= PIC_MAX_CNT) {
 			fprintf(stderr, "max picture number: %d\n", PIC_MAX_CNT);
-			break;
+			free(copy);
+			return -EINVAL;
 		}
-		name = strtok(NULL, ",");
+		if (strlen(name) >= PIC_NAME_MAX_LEN) {
+			fprintf(stderr, "picture name is too long\n");
+			free(copy);
+			return -EINVAL;
+		}
+		strcpy(state->pictures[state->picture_count++], name);
+		name = strtok_r(NULL, ",", &saveptr);
 	}
 
+	free(copy);
+	return 0;
+}
+
+static void free_test_state(struct test_state *state)
+{
+	unsigned int i;
+	unsigned int j;
+
+	for (i = 0; i < state->pipe_count; i++) {
+		if (state->pipes[i].cons) {
+			for (j = 0; j < state->pipes[i].num_cons; j++)
+				free((void *)state->pipes[i].cons[j]);
+		}
+		free(state->pipes[i].cons);
+		free(state->pipes[i].con_ids);
+	}
+	free(state->pipes);
+	free(state->plane_args);
+	free(state->properties);
+	memset(state, 0, sizeof(*state));
+}
+
+static const char optstr[] = "acdD:efF:M:P:ps:Cvw:otE";
+
+static int parse_test_options(int argc, char **argv, struct test_state *state)
+{
+	unsigned int args = 0;
+	int c;
+	struct plane_arg *plane_args;
+	struct pipe_arg *pipes;
+	struct property_arg *properties;
+	size_t size;
+
+	optind = 1;
+	opterr = 0;
+
+	while ((c = getopt(argc, argv, optstr)) != -1) {
+		args++;
+
+		switch (c) {
+		case 'a':
+			state->use_atomic = 1;
+			break;
+		case 'c':
+			state->connectors = 1;
+			break;
+		case 'D':
+			state->device = optarg;
+			args--;
+			break;
+		case 'd':
+			state->drop_master = 1;
+			break;
+		case 'e':
+			state->encoders = 1;
+			break;
+		case 'f':
+			state->framebuffers = 1;
+			break;
+		case 'F':
+			if (parse_pictures(state, optarg))
+				return -EINVAL;
+			break;
+		case 'M':
+			state->module = optarg;
+			/* Preserve the default behaviour of dumping all information. */
+			args--;
+			break;
+		case 'o':
+			state->dynamic_onoff = 1;
+			break;
+		case 'P':
+			size = (state->plane_count + 1) * sizeof(*plane_args);
+			plane_args = realloc(state->plane_args, size);
+			if (!plane_args)
+				return -ENOMEM;
+			state->plane_args = plane_args;
+			memset(&state->plane_args[state->plane_count], 0, sizeof(*state->plane_args));
+			state->plane_count++;
+
+			if (parse_plane(&state->plane_args[state->plane_count - 1], optarg, &state->zpos) < 0)
+				return -EINVAL;
+			break;
+		case 'p':
+			state->crtcs = 1;
+			state->planes = 1;
+			break;
+		case 's':
+			size = (state->pipe_count + 1) * sizeof(*pipes);
+			pipes = realloc(state->pipes, size);
+			if (!pipes)
+				return -ENOMEM;
+			state->pipes = pipes;
+			memset(&state->pipes[state->pipe_count], 0, sizeof(*state->pipes));
+			state->pipe_count++;
+
+			if (parse_connector(&state->pipes[state->pipe_count - 1], optarg) < 0)
+				return -EINVAL;
+			break;
+		case 't':
+			state->one_shot = true;
+			break;
+		case 'v':
+			state->test_vsync = 1;
+			break;
+		case 'w':
+			size = (state->property_count + 1) * sizeof(*properties);
+			properties = realloc(state->properties, size);
+			if (!properties)
+				return -ENOMEM;
+			state->properties = properties;
+			memset(&state->properties[state->property_count], 0, sizeof(*state->properties));
+			state->property_count++;
+
+			if (parse_property(&state->properties[state->property_count - 1], optarg) < 0)
+				return -EINVAL;
+			break;
+		case 'E':
+			state->error_monitor = true;
+			break;
+		default:
+			return -EINVAL;
+		}
+	}
+
+	if (!args || (args == 1 && state->use_atomic))
+		state->encoders = state->connectors = state->crtcs =
+			state->planes = state->framebuffers = 1;
+
+	return 0;
 }
 
 static void usage(char *name)
@@ -2117,138 +2278,29 @@ static int pipe_resolve_connectors(struct device *dev, struct pipe_arg *pipe)
 	return 0;
 }
 
-static char optstr[] = "acdD:efF:M:P:ps:Cvw:otE";
-
 int main(int argc, char **argv)
 {
 	struct device dev;
-	int c;
-	int encoders = 0, connectors = 0, crtcs = 0, planes = 0, framebuffers = 0;
-	int drop_master = 0;
-	int test_vsync = 0;
-	int use_atomic = 0;
-	int dynamic_onoff = 0;
-	char *device = NULL;
-	char *module = NULL;
+	struct test_state state = {};
 	unsigned int i;
-	unsigned int count = 0, plane_count = 0;
-	unsigned int prop_count = 0;
-	struct pipe_arg *pipe_args = NULL;
-	struct plane_arg *plane_args = NULL;
 	struct plane_arg *c_plane_args = NULL;
-	struct property_arg *prop_args = NULL;
-	unsigned int args = 0;
 	unsigned int c_plane_count = 0;
 	unsigned int c_count = 0;
 	bool c_increase_mode;
-	bool one_shot = false;
-	bool error_monitor = false;
 	drmVersionPtr version;
 	int ret;
 	int exit_code = 0;
 
 	memset(&dev, 0, sizeof dev);
 
-	opterr = 0;
-	while ((c = getopt(argc, argv, optstr)) != -1) {
-		args++;
-
-		switch (c) {
-		case 'a':
-			use_atomic = 1;
-			break;
-		case 'c':
-			connectors = 1;
-			break;
-		case 'D':
-			device = optarg;
-			args--;
-			break;
-		case 'd':
-			drop_master = 1;
-			break;
-		case 'e':
-			encoders = 1;
-			break;
-		case 'f':
-			framebuffers = 1;
-			break;
-		case 'F':
-			parse_pictures(optarg);
-			break;
-		case 'M':
-			module = optarg;
-			/* Preserve the default behaviour of dumping all information. */
-			args--;
-			break;
-		case 'o':
-			dynamic_onoff = 1;
-			break;
-		case 'P':
-			plane_args = realloc(plane_args,
-					     (plane_count + 1) * sizeof *plane_args);
-			if (plane_args == NULL) {
-				fprintf(stderr, "memory allocation failed\n");
-				return 1;
-			}
-			memset(&plane_args[plane_count], 0, sizeof(*plane_args));
-
-			if (parse_plane(&plane_args[plane_count], optarg) < 0)
-				usage(argv[0]);
-
-			plane_count++;
-			break;
-		case 'p':
-			crtcs = 1;
-			planes = 1;
-			break;
-		case 's':
-			pipe_args = realloc(pipe_args,
-					    (count + 1) * sizeof *pipe_args);
-			if (pipe_args == NULL) {
-				fprintf(stderr, "memory allocation failed\n");
-				return 1;
-			}
-			memset(&pipe_args[count], 0, sizeof(*pipe_args));
-
-			if (parse_connector(&pipe_args[count], optarg) < 0)
-				usage(argv[0]);
-
-			count++;
-			break;
-		case 't':
-			one_shot = true;
-			break;
-		case 'v':
-			test_vsync = 1;
-			break;
-		case 'w':
-			prop_args = realloc(prop_args,
-					   (prop_count + 1) * sizeof *prop_args);
-			if (prop_args == NULL) {
-				fprintf(stderr, "memory allocation failed\n");
-				return 1;
-			}
-			memset(&prop_args[prop_count], 0, sizeof(*prop_args));
-
-			if (parse_property(&prop_args[prop_count], optarg) < 0)
-				usage(argv[0]);
-
-			prop_count++;
-			break;
-		case 'E':
-			error_monitor = true;
-			break;
-		default:
-			usage(argv[0]);
-			break;
-		}
+	ret = parse_test_options(argc, argv, &state);
+	if (ret) {
+		usage(argv[0]);
+		exit_code = 1;
+		goto cleanup;
 	}
 
-	if (!args || (args == 1 && use_atomic))
-		encoders = connectors = crtcs = planes = framebuffers = 1;
-
-	dev.fd = util_open(device, module);
+	dev.fd = util_open(state.device, state.module);
 	if (dev.fd < 0) {
 		exit_code = -1;
 		goto cleanup;
@@ -2266,7 +2318,7 @@ int main(int argc, char **argv)
 	}
 
 	ret = drmSetClientCap(dev.fd, DRM_CLIENT_CAP_ATOMIC, 1);
-	if (ret && use_atomic) {
+	if (ret && state.use_atomic) {
 		fprintf(stderr, "no atomic modesetting support: %s\n", strerror(errno));
 		exit_code = -1;
 		goto cleanup;
@@ -2274,7 +2326,7 @@ int main(int argc, char **argv)
 
 	dev.use_atomic = 1;
 
-	if (test_vsync && !count) {
+	if (state.test_vsync && !state.pipe_count) {
 		fprintf(stderr, "page flipping requires at least one -s option.\n");
 		exit_code = -1;
 		goto cleanup;
@@ -2286,27 +2338,27 @@ int main(int argc, char **argv)
 		goto cleanup;
 	}
 
-	for (i = 0; i < count; i++) {
-		if (pipe_resolve_connectors(&dev, &pipe_args[i]) < 0) {
+	for (i = 0; i < state.pipe_count; i++) {
+		if (pipe_resolve_connectors(&dev, &state.pipes[i]) < 0) {
 			exit_code = 1;
 			goto cleanup;
 		}
 	}
 
-#define dump_resource(dev, res) if (res) dump_##res(dev)
+#define dump_resource(dev, state, res) if ((state).res) dump_##res(dev)
 
-	dump_resource(&dev, encoders);
-	dump_resource(&dev, connectors);
-	dump_resource(&dev, crtcs);
-	dump_resource(&dev, planes);
-	dump_resource(&dev, framebuffers);
+	dump_resource(&dev, state, encoders);
+	dump_resource(&dev, state, connectors);
+	dump_resource(&dev, state, crtcs);
+	dump_resource(&dev, state, planes);
+	dump_resource(&dev, state, framebuffers);
 
-	for (i = 0; i < prop_count; ++i)
-		set_property(&dev, &prop_args[i]);
+	for (i = 0; i < state.property_count; ++i)
+		set_property(&dev, &state.properties[i]);
 
 	dev.req = drmModeAtomicAlloc();
 
-	if (error_monitor) {
+	if (state.error_monitor) {
 		dev.error_event_fd = open("/sys/devices/platform/display-subsystem/error_event", O_RDONLY);
 
 		if (dev.error_event_fd < 0) {
@@ -2317,7 +2369,7 @@ int main(int argc, char **argv)
 		}
 	}
 
-	if (count) {
+	if (state.pipe_count) {
 		uint64_t cap = 0;
 
 		ret = drmGetCap(dev.fd, DRM_CAP_DUMB_BUFFER, &cap);
@@ -2327,14 +2379,15 @@ int main(int argc, char **argv)
 			goto cleanup;
 		}
 
-		ret = atomic_set_mode(&dev, pipe_args, count);
+		ret = atomic_set_mode(&dev, state.pipes, state.pipe_count);
 		if (ret) {
 			fprintf(stderr, "atomic_set_mode failed\n");
 			exit_code = 1;
 			goto cleanup;
 		}
 
-		ret = atomic_set_planes(&dev, plane_args, plane_count, false);
+		ret = atomic_set_planes(&dev, state.plane_args, state.plane_count, state.pictures,
+					state.picture_count, false);
 		if (ret) {
 			fprintf(stderr, "atomic_set_planes failed\n");
 			exit_code = 1;
@@ -2348,12 +2401,14 @@ int main(int argc, char **argv)
 			goto cleanup;
 		}
 
-		gettimeofday(&pipe_args->start, NULL);
-		pipe_args->swap_count = 0;
-		write_wb_file(pipe_args, count);
+		gettimeofday(&state.pipes[0].start, NULL);
+		state.pipes[0].swap_count = 0;
+		write_wb_file(state.pipes, state.pipe_count);
 
-		if (test_vsync) {
-			c_plane_args = calloc(1, plane_count * sizeof(*c_plane_args));
+		if (state.test_vsync) {
+			size_t size = state.plane_count * sizeof(*c_plane_args);
+
+			c_plane_args = calloc(1, size);
 			if (c_plane_args == NULL) {
 				fprintf(stderr, "memory allocation for commit plane args failed\n");
 				exit_code = 1;
@@ -2363,20 +2418,25 @@ int main(int argc, char **argv)
 			c_increase_mode = true;
 		}
 
-		while (test_vsync) {
+		while (state.test_vsync) {
 			drmModeAtomicFree(dev.req);
 			dev.req = drmModeAtomicAlloc();
-			if (dynamic_onoff) {
-				memcpy(c_plane_args, plane_args, sizeof(*c_plane_args));
-				ret = atomic_set_planes(&dev, plane_args, c_plane_count, true);
+			if (state.dynamic_onoff) {
+				memcpy(c_plane_args, state.plane_args, sizeof(*c_plane_args));
+				ret = atomic_set_planes(&dev, state.plane_args, c_plane_count,
+							state.pictures,
+							state.picture_count, true);
 				if (ret) {
 					fprintf(stderr, "atomic_set_planes failed in vsync loop\n");
 					exit_code = 1;
 					goto cleanup;
 				}
-				atomic_clear_planes(&dev, &plane_args[c_plane_count], plane_count - c_plane_count);
+				atomic_clear_planes(&dev, &state.plane_args[c_plane_count],
+						    state.plane_count - c_plane_count);
 			} else {
-				ret = atomic_set_planes(&dev, plane_args, plane_count, true);
+				ret = atomic_set_planes(&dev, state.plane_args, state.plane_count,
+							state.pictures,
+							state.picture_count, true);
 				if (ret) {
 					fprintf(stderr, "atomic_set_planes failed in vsync loop\n");
 					exit_code = 1;
@@ -2390,17 +2450,18 @@ int main(int argc, char **argv)
 				goto cleanup;
 			}
 
-			pipe_args->swap_count++;
-			if (pipe_args->swap_count == 60) {
+			state.pipes[0].swap_count++;
+			if (state.pipes[0].swap_count == 60) {
 				struct timeval end;
 				double t;
 
 				gettimeofday(&end, NULL);
 				t = end.tv_sec + end.tv_usec * 1e-6 -
-			    (pipe_args->start.tv_sec + pipe_args->start.tv_usec * 1e-6);
-				fprintf(stderr, "freq: %.02fHz\n", pipe_args->swap_count / t);
-				pipe_args->swap_count = 0;
-				pipe_args->start = end;
+				    (state.pipes[0].start.tv_sec +
+				     state.pipes[0].start.tv_usec * 1e-6);
+				fprintf(stderr, "freq: %.02fHz\n", state.pipes[0].swap_count / t);
+				state.pipes[0].swap_count = 0;
+				state.pipes[0].start = end;
 
 				c_count++;
 				/* turn on or off plane one by one every 30s */
@@ -2411,9 +2472,8 @@ int main(int argc, char **argv)
 					else
 						c_plane_count--;
 
-					if (c_plane_count >= plane_count) {
+					if (c_plane_count >= state.plane_count)
 						c_increase_mode = false; /* decrease plane one by one*/
-					}
 
 					if (c_plane_count == 1)
 						c_increase_mode = true;
@@ -2421,10 +2481,10 @@ int main(int argc, char **argv)
 			}
 		}
 
-		if (drop_master)
+		if (state.drop_master)
 			drmDropMaster(dev.fd);
 
-		if (!one_shot)
+		if (!state.one_shot)
 			getchar();
 		else
 			sleep(3);
@@ -2432,17 +2492,17 @@ int main(int argc, char **argv)
 		drmModeAtomicFree(dev.req);
 		dev.req = drmModeAtomicAlloc();
 
-		atomic_clear_mode(&dev, pipe_args, count);
-		atomic_clear_planes(&dev, plane_args, plane_count);
+		atomic_clear_mode(&dev, state.pipes, state.pipe_count);
+		atomic_clear_planes(&dev, state.plane_args, state.plane_count);
 		ret = drmModeAtomicCommit(dev.fd, dev.req, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
 		if (ret)
 			fprintf(stderr, "Atomic Commit failed: %s\n", strerror(errno));
 
-		atomic_clear_FB(&dev, plane_args, plane_count);
-		atomic_clear_wb_FB(&dev, pipe_args, count);
+		atomic_clear_FB(&dev, state.plane_args, state.plane_count);
+		atomic_clear_wb_FB(&dev, state.pipes, state.pipe_count);
 	}
 
-	if (error_monitor)
+	if (state.error_monitor)
 		getchar();
 
 cleanup:
@@ -2454,6 +2514,8 @@ cleanup:
 
 	if (dev.fd >= 0)
 		drmClose(dev.fd);
+
+	free_test_state(&state);
 
 	return exit_code;
 }
