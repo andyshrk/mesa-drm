@@ -1257,20 +1257,11 @@ static int atomic_set_plane(struct device *dev, struct plane_arg *p, const char 
 	p->old_bo = p->bo;
 
 	if (!plane_bo) {
-		plane_bo = ovl_bo_create(dev->fd, p->fourcc, p->afbc_en,
-				     p->afrc_cu_size, p->afrc_scan, p->stride, p->h,
+		plane_bo = ovl_bo_create(dev->fd, p->fourcc, p->afbc_en, p->stride, p->h,
 				     handles, pitches, offsets, file_name);
 
 		if (plane_bo == NULL)
 			return -1;
-
-		/*
-		 * For AFRC, report the mesa pan_afrc pitch instead of the
-		 * dumb buffer pitch.
-		 */
-		if (p->afrc_en)
-			pitches[0] = get_afrc_pitch(p->stride, p->afrc_cu_size,
-						    p->afrc_scan);
 
 		if (p->afbc_en || p->tiled_en || p->rfbc_en || p->afrc_en) {
 			uint64_t afrc_cu_size;
@@ -1462,8 +1453,7 @@ static int atomic_add_wbc_fb(struct device *dev, struct pipe_arg *pipe)
 	w = pipe->mode->hdisplay;
 	h =  pipe->mode->vdisplay;
 	if (!pipe_bo) {
-		pipe_bo = ovl_bo_create(dev->fd, pipe->fourcc, pipe->afbc_en || pipe->rfbc_en,
-					0, false, w, h,
+		pipe_bo = ovl_bo_create(dev->fd, pipe->fourcc, pipe->afbc_en || pipe->rfbc_en, w, h,
 					handles, pitches, offsets, NULL);
 
 		if (pipe_bo == NULL)

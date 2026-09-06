@@ -135,48 +135,8 @@ static int get_afbc_size(uint32_t width, uint32_t height, uint32_t bpp)
 	return size;
 }
 
-/*
- * 4x4 pixels per coding unit for RGB formats, see mesa pan_afrc_clump_size()
- */
-#define AFRC_CU_PIXELS                  16
-
-/*
- * AFRC pitch calculation follows mesa pan_afrc:
- *
- * Layout | Paging tile (coding units) | Paging tile (pixels)
- * -------|----------------------------|---------------------
- * SCAN   | 16x4                       | 64x16
- * ROT    | 8x8                        | 32x32
- *
- * The row stride is the number of bytes between rows of paging tiles
- * (see pan_afrc_row_stride()). The per-pixel-row pitch exported through
- * WSI is the tile row stride divided by the tile height
- * (see pan_mod_afrc_get_wsi_row_pitch()), which resolves to:
- *
- *	pitch = ALIGN(width, tile_width) * cu_size / AFRC_CU_PIXELS
- *
- * cu_size / AFRC_CU_PIXELS is the average compressed bytes per pixel:
- * each CU stores 4x4 pixels in cu_size bytes. Multiply before dividing
- * to preserve fractional values (e.g. 24 / 16 = 1.5 bytes per pixel).
- */
-unsigned int get_afrc_pitch(unsigned int width, unsigned int cu_size, bool scan)
-{
-	unsigned int tile_width = scan ? 64 : 32;
-
-	return ALIGN(width, tile_width) * cu_size / AFRC_CU_PIXELS;
-}
-
-static unsigned int get_afrc_size(unsigned int width, unsigned int height,
-				  unsigned int cu_size, bool scan)
-{
-	unsigned int tile_height = scan ? 16 : 32;
-
-	return get_afrc_pitch(width, cu_size, scan) * ALIGN(height, tile_height);
-}
-
 struct bo *
 ovl_bo_create(int fd, unsigned int format, bool is_afbc,
-	  unsigned int afrc_cu_size, bool afrc_scan,
 	  unsigned int width, unsigned int height,
 	  unsigned int handles[4], unsigned int pitches[4],
 	  unsigned int offsets[4], const char *pic_name)
@@ -322,18 +282,6 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 		 */
 		afbc_size = ALIGN(afbc_size, 4096);
 		while (afbc_size > (width * virtual_height * bpp >> 3))
-			virtual_height++;
-	}
-
-	/*
-	 * An afrc buffer is aligned to the paging tile dimensions, so it
-	 * may be larger than the uncompressed data for small buffers.
-	 */
-	if (afrc_cu_size) {
-		unsigned int afrc_size =
-			get_afrc_size(width, height, afrc_cu_size, afrc_scan);
-
-		while (afrc_size > (width * virtual_height * bpp >> 3))
 			virtual_height++;
 	}
 

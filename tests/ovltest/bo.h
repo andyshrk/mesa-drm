@@ -42,12 +42,9 @@ struct bo
 };
 
 struct bo *ovl_bo_create(int fd, unsigned int format, bool is_afbc,
-		   unsigned int afrc_cu_size, bool afrc_scan,
 		   unsigned int width, unsigned int height,
 		   unsigned int handles[4], unsigned int pitches[4],
 		   unsigned int offsets[4], const char *pic_name);
-unsigned int get_afrc_pitch(unsigned int width, unsigned int cu_size,
-			    bool scan);
 void bo_destroy(struct bo *bo);
 
 #endif
