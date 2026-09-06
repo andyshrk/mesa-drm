@@ -796,6 +796,7 @@ struct pipe_arg {
 	unsigned int fourcc;
 	drmModeModeInfo *mode;
 	struct crtc *crtc;
+	uint32_t mode_blob_id;
 
 	/* Is write back connector */
 	bool wbc;
@@ -1446,45 +1447,75 @@ static void atomic_clear_planes(struct device *dev, struct plane_arg *p, unsigne
 	}
 }
 
-static void atomic_clear_FB(struct device *dev, struct plane_arg *p, unsigned int count)
+static void destroy_mode_blobs(struct device *dev, struct test_state *state)
 {
 	unsigned int i;
 
-	for (i = 0; i < count; i++) {
-		if (p[i].fb_id) {
-			drmModeRmFB(dev->fd, p[i].fb_id);
-			p[i].fb_id = 0;
-		}
-		if (p[i].old_fb_id) {
-			drmModeRmFB(dev->fd, p[i].old_fb_id);
-			p[i].old_fb_id = 0;
-		}
-		if (p[i].bo) {
-			bo_destroy(p[i].bo);
-			p[i].bo = NULL;
-		}
-		if (p[i].old_bo) {
-			bo_destroy(p[i].old_bo);
-			p[i].old_bo = NULL;
-		}
+	for (i = 0; i < state->pipe_count; i++) {
+		if (!state->pipes[i].mode_blob_id)
+			continue;
 
+		if (drmModeDestroyPropertyBlob(dev->fd, state->pipes[i].mode_blob_id))
+			fprintf(stderr, "failed to destroy mode blob %u\n", state->pipes[i].mode_blob_id);
+		state->pipes[i].mode_blob_id = 0;
 	}
 }
 
-static void atomic_clear_wb_FB(struct device *dev, struct pipe_arg *pipes, unsigned int count)
+static void release_test_buffers(struct device *dev, struct test_state *state)
 {
 	unsigned int i;
+	unsigned int fb_id;
+	unsigned int old_fb_id;
+	struct bo *bo;
+	struct bo *old_bo;
 
-	for (i = 0; i < count; i++) {
-		struct pipe_arg *pipe = &pipes[i];
+	for (i = 0; i < state->plane_count; i++) {
+		struct plane_arg *plane = &state->plane_args[i];
 
-		if (pipe->mode == NULL)
+		fb_id = plane->fb_id;
+		old_fb_id = plane->old_fb_id;
+		bo = plane->bo;
+		old_bo = plane->old_bo;
+
+		if (fb_id)
+			drmModeRmFB(dev->fd, fb_id);
+		if (old_fb_id && old_fb_id != fb_id)
+			drmModeRmFB(dev->fd, old_fb_id);
+		if (bo)
+			bo_destroy(bo);
+		if (old_bo && old_bo != bo)
+			bo_destroy(old_bo);
+
+		plane->fb_id = 0;
+		plane->old_fb_id = 0;
+		plane->bo = NULL;
+		plane->old_bo = NULL;
+	}
+
+	for (i = 0; i < state->pipe_count; i++) {
+		struct pipe_arg *pipe = &state->pipes[i];
+
+		if (!pipe->wbc)
 			continue;
 
-		if (pipe->wbc) {
-			drmModeRmFB(dev->fd, pipe->fb_id);
-			pipe->fb_id = 0;
-		}
+		fb_id = pipe->fb_id;
+		old_fb_id = pipe->old_fb_id;
+		bo = pipe->bo;
+		old_bo = pipe->old_bo;
+
+		if (fb_id)
+			drmModeRmFB(dev->fd, fb_id);
+		if (old_fb_id && old_fb_id != fb_id)
+			drmModeRmFB(dev->fd, old_fb_id);
+		if (bo)
+			bo_destroy(bo);
+		if (old_bo && old_bo != bo)
+			bo_destroy(old_bo);
+
+		pipe->fb_id = 0;
+		pipe->old_fb_id = 0;
+		pipe->bo = NULL;
+		pipe->old_bo = NULL;
 	}
 }
 
@@ -1773,7 +1804,12 @@ static int atomic_set_mode(struct device *dev, struct pipe_arg *pipes, unsigned 
 			if (ret)
 				return ret;
 		} else {
-			drmModeCreatePropertyBlob(dev->fd, pipe->mode, sizeof(*pipe->mode), &blob_id);
+			ret = drmModeCreatePropertyBlob(dev->fd, pipe->mode, sizeof(*pipe->mode), &blob_id);
+			if (ret) {
+				fprintf(stderr, "failed to create mode blob: %s\n", strerror(-ret));
+				return ret;
+			}
+			pipe->mode_blob_id = blob_id;
 			ret = add_property(dev, pipe->crtc->crtc->crtc_id, "MODE_ID", blob_id);
 			if (!ret)
 				ret = add_property(dev, pipe->crtc->crtc->crtc_id, "ACTIVE", 1);
@@ -2540,14 +2576,16 @@ int main(int argc, char **argv)
 		if (ret)
 			fprintf(stderr, "Atomic Commit failed: %s\n", strerror(errno));
 
-		atomic_clear_FB(&dev, state.plane_args, state.plane_count);
-		atomic_clear_wb_FB(&dev, state.pipes, state.pipe_count);
+		destroy_mode_blobs(&dev, &state);
 	}
 
 	if (state.error_monitor)
 		getchar();
 
 cleanup:
+	destroy_mode_blobs(&dev, &state);
+	release_test_buffers(&dev, &state);
+
 	if (dev.req)
 		drmModeAtomicFree(dev.req);
 
