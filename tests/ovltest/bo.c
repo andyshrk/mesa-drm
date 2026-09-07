@@ -454,6 +454,8 @@ void bo_destroy(struct bo *bo)
 	struct drm_mode_destroy_dumb arg;
 	int ret;
 
+	bo_unmap(bo);
+
 	memset(&arg, 0, sizeof(arg));
 	arg.handle = bo->handle;
 
