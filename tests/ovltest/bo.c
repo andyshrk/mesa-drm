@@ -420,7 +420,7 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 	if (pic_name) {
 		pic_fd = open(pic_name, O_RDONLY);
 
-		if (pic_fd > 0) {
+		if (pic_fd >= 0) {
 			/* 
 			 * take care of stride >= act_width
 			 * For a afbc buffer, there maybe gap between header and playlod,
@@ -439,6 +439,7 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 				for(i = 0; i < virtual_height; i++)
 					read(pic_fd, virtual + offsets[1] + i * pitches[1], (width * bpp >> 3) * 2);
 			}
+			close(pic_fd);
 		} else {
 			fprintf(stderr, "failed to open %s: %s\n", pic_name, strerror(errno));
 		}
