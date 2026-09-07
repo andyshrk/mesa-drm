@@ -43,9 +43,15 @@ struct ovl_script {
 	size_t test_count;
 };
 
+enum ovl_script_order {
+	OVL_SCRIPT_ORDER_SEQUENTIAL,
+	OVL_SCRIPT_ORDER_RANDOM,
+};
+
 struct ovl_script_options {
 	const char *script;
 	double interval;
+	enum ovl_script_order order;
 };
 
 typedef int (*ovl_script_check_command_fn)(const struct ovl_script_test *test,

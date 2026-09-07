@@ -2417,6 +2417,7 @@ static void usage(char *name, int status)
 	fprintf(stderr, "\t-M module\tuse the given driver\n");
 	fprintf(stderr, "\t-D device\tuse the given device\n");
 	fprintf(stderr, "\t-S <script>\trun ovltest commands from script in a loop\n");
+	fprintf(stderr, "\t-R <script>\trun random ovltest command from script in a loop\n");
 	fprintf(stderr, "\t-i <seconds>\tdelay between script tests (default: 2)\n");
 	fprintf(stderr, "\t-t \t oneshot test, show one frame then exit\n");
 
@@ -2631,6 +2632,19 @@ out:
 	return ret;
 }
 
+static size_t random_script_index(size_t count)
+{
+	const uint32_t range = (uint32_t)RAND_MAX + 1U;
+	const uint32_t rejected = range % count;
+	uint32_t value;
+
+	do {
+		value = (uint32_t)random();
+	} while (value >= range - rejected);
+
+	return value % count;
+}
+
 /*
  * Open the DRM device, require atomic modesetting, and load its resources.
  * Script mode also requires plane resources.
@@ -2667,7 +2681,7 @@ static int run_script(const struct ovl_script_options *options)
 	char *device = NULL;
 	char *module = NULL;
 	char error[128];
-	size_t index;
+	size_t index = 0;
 	size_t i;
 	int ret;
 	int exit_error = 0;
@@ -2696,7 +2710,15 @@ static int run_script(const struct ovl_script_options *options)
 	signal(SIGINT, handle_signal);
 	signal(SIGTERM, handle_signal);
 
-	for (index = 0; !stop_requested; index = (index + 1) % script.test_count) {
+	if (options->order == OVL_SCRIPT_ORDER_RANDOM) {
+		srandom((unsigned long)time(NULL));
+		index = random_script_index(script.test_count);
+	}
+
+	for (; !stop_requested;
+	     index = options->order == OVL_SCRIPT_ORDER_RANDOM ?
+		     random_script_index(script.test_count) :
+		     (index + 1) % script.test_count) {
 		command = &script.tests[index];
 
 		ret = parse_test_options(command->argc, command->argv, &next);

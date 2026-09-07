@@ -2,7 +2,6 @@
 
 #include <ctype.h>
 #include <errno.h>
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -101,21 +100,24 @@ int ovl_script_parse_options(int argc, char **argv, struct ovl_script_options *o
 
 	options->script = NULL;
 	options->interval = 2.0;
+	options->order = OVL_SCRIPT_ORDER_SEQUENTIAL;
 
-	if (argc < 2 || strcmp(argv[1], "-S"))
+	if (argc < 2 || (strcmp(argv[1], "-S") && strcmp(argv[1], "-R")))
 		return 0;
 
 	options->interval = -1.0;
 	optind = 1;
 	opterr = 0;
 
-	while ((option = getopt(argc, argv, "S:i:")) != -1) {
+	while ((option = getopt(argc, argv, "S:R:i:")) != -1) {
 		switch (option) {
 		case 'S':
+		case 'R':
 			if (options->script)
 				return -EINVAL;
 
 			options->script = optarg;
+			options->order = option == 'R' ? OVL_SCRIPT_ORDER_RANDOM : OVL_SCRIPT_ORDER_SEQUENTIAL;
 			break;
 		case 'i':
 			if (options->interval >= 0.0)
