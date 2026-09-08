@@ -1450,6 +1450,78 @@ static void atomic_clear_planes(struct device *dev, struct plane_arg *p, unsigne
 	}
 }
 
+static int atomic_disable_unused(struct device *dev, const struct pipe_arg *pipes,
+				 unsigned int pipe_count, const struct plane_arg *planes,
+				 unsigned int plane_count)
+{
+	struct resources *res = dev->resources;
+	unsigned int i, j, k;
+	uint32_t id;
+	bool used;
+	int ret;
+
+	if (!res || !res->res || !res->plane_res)
+		return -ENODEV;
+
+	for (i = 0; i < res->plane_res->count_planes; i++) {
+		id = res->plane_res->planes[i];
+		for (j = 0; j < plane_count; j++) {
+			if (planes[j].plane_id == id)
+				break;
+		}
+		if (j < plane_count)
+			continue;
+
+		ret = add_property(dev, id, "FB_ID", 0);
+		if (!ret)
+			ret = add_property(dev, id, "CRTC_ID", 0);
+		if (ret)
+			return ret;
+	}
+
+	for (i = 0; i < (unsigned int)res->res->count_connectors; i++) {
+		drmModeConnector *connector = res->connectors[i].connector;
+
+		id = connector->connector_id;
+		used = false;
+		for (j = 0; j < pipe_count && !used; j++) {
+			for (k = 0; k < pipes[j].num_cons; k++) {
+				if (pipes[j].con_ids[k] == id) {
+					used = true;
+					break;
+				}
+			}
+		}
+		if (used)
+			continue;
+
+		ret = add_property(dev, id, "CRTC_ID", 0);
+		if (!ret && connector->connector_type == DRM_MODE_CONNECTOR_WRITEBACK)
+			ret = add_property(dev, id, "WRITEBACK_FB_ID", 0);
+		if (ret)
+			return ret;
+	}
+
+	for (i = 0; i < (unsigned int)res->res->count_crtcs; i++) {
+		id = res->crtcs[i].crtc->crtc_id;
+		for (j = 0; j < pipe_count; j++) {
+			if (pipes[j].crtc_id == id ||
+			    (pipes[j].crtc && pipes[j].crtc->crtc->crtc_id == id))
+				break;
+		}
+		if (j < pipe_count)
+			continue;
+
+		ret = add_property(dev, id, "ACTIVE", 0);
+		if (!ret)
+			ret = add_property(dev, id, "MODE_ID", 0);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
 static void destroy_mode_blobs(struct device *dev, struct test_state *state)
 {
 	unsigned int i;
@@ -2496,6 +2568,14 @@ int main(int argc, char **argv)
 			goto cleanup;
 		}
 
+		ret = atomic_disable_unused(&dev, state.pipes, state.pipe_count,
+					    state.plane_args, state.plane_count);
+		if (ret) {
+			fprintf(stderr, "failed to disable unused objects\n");
+			exit_code = 1;
+			goto cleanup;
+		}
+
 		ret = drmModeAtomicCommit(dev.fd, dev.req, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
 		if (ret) {
 			fprintf(stderr, "Atomic Commit failed [1]\n");
@@ -2533,8 +2613,6 @@ int main(int argc, char **argv)
 					exit_code = 1;
 					goto cleanup;
 				}
-				atomic_clear_planes(&dev, &state.plane_args[c_plane_count],
-						    state.plane_count - c_plane_count);
 			} else {
 				ret = atomic_set_planes(&dev, state.plane_args, state.plane_count,
 							state.pictures,
@@ -2545,6 +2623,15 @@ int main(int argc, char **argv)
 					goto cleanup;
 				}
 			}
+			ret = atomic_disable_unused(&dev, state.pipes, state.pipe_count,
+						    state.plane_args, state.dynamic_onoff ?
+						    c_plane_count : state.plane_count);
+			if (ret) {
+				fprintf(stderr, "failed to disable unused objects\n");
+				exit_code = 1;
+				goto cleanup;
+			}
+
 			ret = drmModeAtomicCommit(dev.fd, dev.req, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
 			if (ret) {
 				fprintf(stderr, "Atomic Commit failed [2]\n");
