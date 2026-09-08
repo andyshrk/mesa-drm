@@ -2549,6 +2549,37 @@ static void print_test_echoes(const struct ovl_script_test *test)
 	fflush(stdout);
 }
 
+static int print_drm_summary(void)
+{
+	FILE *file;
+	char *line = NULL;
+	size_t size = 0;
+
+	file = fopen("/sys/kernel/debug/dri/0/summary", "r");
+	if (!file) {
+		fprintf(stderr, "failed to read DRM summary: %s\n", strerror(errno));
+		return -errno;
+	}
+
+	while (getline(&line, &size, file) >= 0)
+		printf("%s", line);
+
+	if (ferror(file)) {
+		int saved_errno = errno;
+
+		fprintf(stderr, "failed to read DRM summary: %s\n",
+			strerror(saved_errno));
+		free(line);
+		fclose(file);
+		return -saved_errno;
+	}
+
+	free(line);
+	fclose(file);
+	fflush(stdout);
+	return 0;
+}
+
 static int wait_interval(double seconds)
 {
 	struct timespec start;
@@ -2707,6 +2738,8 @@ static int run_script(const struct ovl_script_options *options)
 		memset(&next, 0, sizeof(next));
 
 		print_test_echoes(command);
+		if (command->dump_summary)
+			print_drm_summary();
 
 		ret = wait_interval(options->interval);
 		if (ret < 0)
