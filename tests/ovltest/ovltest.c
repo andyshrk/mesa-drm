@@ -1751,7 +1751,8 @@ static void drm_create_error_monitor_thread(struct device *dev)
 	pthread_setschedparam(evt->monitor_thread, SCHED_FIFO, &param);
 }
 
-static int atomic_set_mode(struct device *dev, struct pipe_arg *pipes, unsigned int count)
+static int atomic_set_mode(struct device *dev, struct pipe_arg *pipes,
+			   unsigned int count, bool strict)
 {
 	unsigned int i;
 	unsigned int j;
@@ -1762,6 +1763,10 @@ static int atomic_set_mode(struct device *dev, struct pipe_arg *pipes, unsigned 
 		struct pipe_arg *pipe = &pipes[i];
 
 		ret = pipe_find_crtc_and_mode(dev, pipe);
+		if (strict && (ret < 0 || !pipe->mode)) {
+			fprintf(stderr, "failed to prepare pipe %u\n", i);
+			return ret < 0 ? ret : -EINVAL;
+		}
 		if (ret < 0) {
 			fprintf(stderr, "failed to find CRTC and mode for pipe %d\n", i);
 			failed_pipes++;
@@ -1824,10 +1829,12 @@ static int atomic_set_mode(struct device *dev, struct pipe_arg *pipes, unsigned 
 	return 0;
 }
 
-static void atomic_clear_mode(struct device *dev, struct pipe_arg *pipes, unsigned int count)
+static int atomic_clear_mode(struct device *dev, struct pipe_arg *pipes, unsigned int count)
 {
 	unsigned int i;
 	unsigned int j;
+	int ret;
+	int error = 0;
 
 	for (i = 0; i < count; i++) {
 		struct pipe_arg *pipe = &pipes[i];
@@ -1840,17 +1847,30 @@ static void atomic_clear_mode(struct device *dev, struct pipe_arg *pipes, unsign
 		 * avoid triger crtc disable/enable on the writeback display path.
 		 */
 		if (pipe->wbc) {
-			add_property(dev, pipe->con_ids[0], "WRITEBACK_FB_ID",0);
-			add_property(dev, pipe->con_ids[0], "CRTC_ID",0);
+			ret = add_property(dev, pipe->con_ids[0], "WRITEBACK_FB_ID", 0);
+			if (ret && !error)
+				error = ret;
+			ret = add_property(dev, pipe->con_ids[0], "CRTC_ID", 0);
+			if (ret && !error)
+				error = ret;
 			continue;
 		}
 
-		for (j = 0; j < pipe->num_cons; ++j)
-			add_property(dev, pipe->con_ids[j], "CRTC_ID",0);
+		for (j = 0; j < pipe->num_cons; ++j) {
+			ret = add_property(dev, pipe->con_ids[j], "CRTC_ID", 0);
+			if (ret && !error)
+				error = ret;
+		}
 
-		add_property(dev, pipe->crtc->crtc->crtc_id, "MODE_ID", 0);
-		add_property(dev, pipe->crtc->crtc->crtc_id, "ACTIVE", 0);
+		ret = add_property(dev, pipe->crtc->crtc->crtc_id, "MODE_ID", 0);
+		if (ret && !error)
+			error = ret;
+		ret = add_property(dev, pipe->crtc->crtc->crtc_id, "ACTIVE", 0);
+		if (ret && !error)
+			error = ret;
 	}
+
+	return error;
 }
 
 #define min(a, b)	((a) < (b) ? (a) : (b))
@@ -2461,7 +2481,7 @@ int main(int argc, char **argv)
 			goto cleanup;
 		}
 
-		ret = atomic_set_mode(&dev, state.pipes, state.pipe_count);
+		ret = atomic_set_mode(&dev, state.pipes, state.pipe_count, false);
 		if (ret) {
 			fprintf(stderr, "atomic_set_mode failed\n");
 			exit_code = 1;

@@ -50,9 +50,35 @@ static void test_writeback_mode_failure(void)
 	free_test_state(&state);
 }
 
+static void test_partial_mode_failure(void)
+{
+	drmModeModeInfo mode = { .name = "800x600", .hdisplay = 800, .vdisplay = 600 };
+	drmModeConnector connector = { .connector_id = 10, .count_modes = 1, .modes = &mode };
+	drmModeCrtc crtc = { .crtc_id = 20 };
+	drmModeRes res = { .count_connectors = 1, .count_crtcs = 1 };
+	struct connector connectors[] = { { .connector = &connector } };
+	struct crtc crtcs[] = { { .crtc = &crtc } };
+	struct resources resources = { .res = &res, .connectors = connectors, .crtcs = crtcs };
+	struct device dev = { .resources = &resources, .use_atomic = 1 };
+	struct test_state state = {};
+	unsigned int calls = property_calls;
+
+	state.pipe_count = 2;
+	state.pipes = calloc(state.pipe_count, sizeof(*state.pipes));
+	assert(state.pipes);
+	assert(parse_connector(&state.pipes[0], "10@20:800x600") == 0);
+	assert(parse_connector(&state.pipes[1], "10@21:800x600") == 0);
+	assert(pipe_resolve_connectors(&dev, &state.pipes[0]) == 0);
+	assert(pipe_resolve_connectors(&dev, &state.pipes[1]) == 0);
+	assert(atomic_set_mode(&dev, state.pipes, state.pipe_count, true) < 0);
+	assert(property_calls == calls);
+	free_test_state(&state);
+}
+
 int main(void)
 {
 	test_writeback_mode_failure();
+	test_partial_mode_failure();
 	puts("ovltest state tests: PASS");
 	return 0;
 }
