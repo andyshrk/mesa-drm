@@ -796,6 +796,7 @@ struct pipe_arg {
 	unsigned int fourcc;
 	drmModeModeInfo *mode;
 	struct crtc *crtc;
+	drmModeModeInfo *owned_mode;
 	uint32_t mode_blob_id;
 
 	/* Is write back connector */
@@ -1038,7 +1039,9 @@ static int pipe_find_crtc_and_mode(struct device *dev, struct pipe_arg *pipe)
 			continue;
 	        if (connector->connector_type == DRM_MODE_CONNECTOR_WRITEBACK) {
 			pipe->wbc = true;
-			mode = calloc(1, sizeof(*mode));
+			if (!pipe->owned_mode)
+				pipe->owned_mode = calloc(1, sizeof(*mode));
+			mode = pipe->owned_mode;
 			if (!mode) {
 				fprintf(stderr, "out of memory for writeback connector mode\n");
 				return -ENOMEM;
@@ -2180,6 +2183,7 @@ static void free_test_state(struct test_state *state)
 		}
 		free(state->pipes[i].cons);
 		free(state->pipes[i].con_ids);
+		free(state->pipes[i].owned_mode);
 	}
 	free(state->pipes);
 	free(state->plane_args);

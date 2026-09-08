@@ -28,3 +28,13 @@ modetest = executable(
   install : with_install_tests,
   link_args : ['-static'],
 )
+
+ovltest_state_test = executable(
+  'ovltest-state-test',
+  files('ovltest_state_test.c', 'bo.c', 'ovltest_script.c'),
+  c_args : [libdrm_c_args, '-Wno-pointer-arith'],
+  include_directories : [inc_root, inc_tests, inc_drm],
+  dependencies : [dep_threads, dep_cairo],
+  link_with : [libdrm, libutil],
+)
+test('ovltest-state', ovltest_state_test, timeout : 10)
