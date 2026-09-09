@@ -52,7 +52,9 @@
 #include <errno.h>
 #include <poll.h>
 #include <pthread.h>
+#include <signal.h>
 #include <sys/time.h>
+#include <time.h>
 #if HAVE_SYS_SELECT_H
 #include <sys/select.h>
 #endif
@@ -68,6 +70,7 @@
 #include "util/pattern.h"
 
 #include "bo.h"
+#include "ovltest_script.h"
 
 #define PIC_NAME_MAX_LEN	256
 #define PIC_MAX_CNT		8
@@ -2387,7 +2390,7 @@ static int parse_test_options(int argc, char **argv, struct test_state *state)
 	return 0;
 }
 
-static void usage(char *name)
+static void usage(char *name, int status)
 {
 	fprintf(stderr, "overlay test by Andy, libdrm version: 2.4.101\n");
 	fprintf(stderr, "usage: %s [-acDdefMPpsCvw]\n", name);
@@ -2413,11 +2416,13 @@ static void usage(char *name)
 	fprintf(stderr, "\t-d\tdrop master after mode set\n");
 	fprintf(stderr, "\t-M module\tuse the given driver\n");
 	fprintf(stderr, "\t-D device\tuse the given device\n");
+	fprintf(stderr, "\t-S <script>\trun ovltest commands from script in a loop\n");
+	fprintf(stderr, "\t-i <seconds>\tdelay between script tests (default: 2)\n");
 	fprintf(stderr, "\t-t \t oneshot test, show one frame then exit\n");
 
 
 	fprintf(stderr, "\n\tDefault is to dump all info.\n");
-	exit(0);
+	exit(status);
 }
 
 static int pipe_resolve_connectors(struct device *dev, struct pipe_arg *pipe)
@@ -2446,11 +2451,161 @@ static int pipe_resolve_connectors(struct device *dev, struct pipe_arg *pipe)
 	return 0;
 }
 
+static volatile sig_atomic_t stop_requested;
+
+static void handle_signal(int signal)
+{
+	(void)signal;
+	stop_requested = 1;
+}
+
+/*
+ * Return true if a command only selects options that can be included in a
+ * script's atomic display transition.
+ */
+static bool script_command_is_transition(const struct test_state *state)
+{
+	return !state->encoders && !state->connectors && !state->crtcs &&
+	       !state->planes && !state->framebuffers && !state->drop_master &&
+	       !state->test_vsync && !state->dynamic_onoff && !state->one_shot &&
+	       !state->error_monitor && !state->property_count;
+}
+
+/*
+ * Parse one script command, verify that it is a complete transition with valid
+ * object IDs and readable pictures, and return its device and module for
+ * cross-command consistency checks.
+ */
+static int check_script_command(const struct ovl_script_test *test,
+				const char **device, const char **module)
+{
+	struct test_state state = {};
+	struct pipe_arg *pipe;
+	size_t j;
+	unsigned int k;
+	int ret = 0;
+
+	ret = parse_test_options(test->argc, test->argv, &state);
+	if (ret)
+		goto out;
+
+	if (!script_command_is_transition(&state)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	if (!state.pipe_count)
+		ret = -EINVAL;
+	for (j = 0; j < state.pipe_count && !ret; j++) {
+		pipe = &state.pipes[j];
+
+		if (!pipe->crtc_id)
+			ret = -EINVAL;
+		for (k = 0; k < pipe->num_cons; k++) {
+			if (!pipe->cons[k] || !*pipe->cons[k] ||
+			    !strcmp(pipe->cons[k], "0"))
+				ret = -EINVAL;
+		}
+	}
+	for (j = 0; j < state.plane_count && !ret; j++) {
+		if (!state.plane_args[j].plane_id || !state.plane_args[j].crtc_id)
+			ret = -EINVAL;
+	}
+	if (ret) {
+		fprintf(stderr, "script command has missing mode or object IDs\n");
+		goto out;
+	}
+
+	if (state.plane_count > state.picture_count) {
+		fprintf(stderr, "not enough picture files for script command\n");
+		ret = -EINVAL;
+		goto out;
+	}
+	for (j = 0; j < state.picture_count; j++) {
+		if (access(state.pictures[j], R_OK)) {
+			fprintf(stderr, "picture file is not readable: %s\n",
+				state.pictures[j]);
+			ret = -errno;
+			goto out;
+		}
+	}
+
+	*device = state.device;
+	*module = state.module;
+
+out:
+	free_test_state(&state);
+
+	return ret;
+}
+
+static void print_test_echoes(const struct ovl_script_test *test)
+{
+	size_t i;
+
+	for (i = 0; i < test->echo_count; i++)
+		printf("%s\n", test->echoes[i]);
+
+	fflush(stdout);
+}
+
+static int wait_interval(double seconds)
+{
+	struct timespec start;
+	struct timespec remaining;
+	struct timespec now;
+	sigset_t blocked;
+	sigset_t previous;
+	double fraction;
+	double whole;
+	double left;
+	int ret = 0;
+
+	sigemptyset(&blocked);
+	sigaddset(&blocked, SIGINT);
+	sigaddset(&blocked, SIGTERM);
+	if (sigprocmask(SIG_BLOCK, &blocked, &previous))
+		return -errno;
+	if (clock_gettime(CLOCK_MONOTONIC, &start)) {
+		ret = -errno;
+		goto out;
+	}
+	if (!isfinite(seconds) || seconds < 0 || seconds > INT32_MAX) {
+		ret = -EINVAL;
+		goto out;
+	}
+	while (!stop_requested) {
+		if (clock_gettime(CLOCK_MONOTONIC, &now)) {
+			ret = -errno;
+			break;
+		}
+		left = seconds - difftime(now.tv_sec, start.tv_sec) -
+		       (now.tv_nsec - start.tv_nsec) / 1000000000.0;
+		if (left <= 0)
+			break;
+		fraction = modf(left, &whole);
+		remaining.tv_sec = (time_t)whole;
+		remaining.tv_nsec = fraction * 1000000000.0;
+		/* Unblock stop signals atomically with starting the wait. */
+		if (pselect(0, NULL, NULL, NULL, &remaining, &previous) < 0 && errno != EINTR) {
+			ret = -errno;
+			break;
+		}
+	}
+	if (stop_requested)
+		ret = 1;
+out:
+	if (sigprocmask(SIG_SETMASK, &previous, NULL) && !ret)
+		ret = -errno;
+	return ret;
+}
+
 /*
  * Open the DRM device, require atomic modesetting, and load its resources.
+ * Script mode also requires plane resources.
  */
 static int setup_device(struct device *dev, const char *device,
-			const char *module)
+			const char *module, bool require_planes)
 {
 	int ret;
 
@@ -2465,16 +2620,156 @@ static int setup_device(struct device *dev, const char *device,
 	}
 
 	dev->resources = get_resources(dev);
-	if (!dev->resources)
+	if (!dev->resources || (require_planes && !dev->resources->plane_res))
 		return -ENODEV;
 
 	return 0;
+}
+
+static int run_script(const struct ovl_script_options *options)
+{
+	struct device dev = {};
+	struct ovl_script script = {};
+	struct test_state current = {};
+	struct test_state next = {};
+	struct ovl_script_test *command;
+	char *device = NULL;
+	char *module = NULL;
+	char error[128];
+	size_t index;
+	size_t i;
+	int ret;
+	int exit_error = 0;
+
+	ret = ovl_script_parse_file(options->script, &script, error, sizeof(error));
+	if (ret) {
+		fprintf(stderr, "failed to parse script %s: %s\n", options->script, error);
+		return 1;
+	}
+
+	for (i = 0; i < script.echo_count; i++)
+		printf("%s\n", script.echoes[i]);
+	fflush(stdout);
+
+	ret = ovl_script_check_commands(&script, check_script_command, &device, &module);
+	if (ret) {
+		fprintf(stderr, "script command check failed: %s\n", strerror(-ret));
+		ovl_script_free(&script);
+		return 1;
+	}
+
+	ret = setup_device(&dev, device, module, true);
+	if (ret)
+		goto cleanup;
+
+	signal(SIGINT, handle_signal);
+	signal(SIGTERM, handle_signal);
+
+	for (index = 0; !stop_requested; index = (index + 1) % script.test_count) {
+		command = &script.tests[index];
+
+		ret = parse_test_options(command->argc, command->argv, &next);
+		if (ret)
+			goto iteration_error;
+
+		for (i = 0; i < next.pipe_count; i++) {
+			ret = pipe_resolve_connectors(&dev, &next.pipes[i]);
+			if (ret)
+				goto iteration_error;
+		}
+
+		dev.req = drmModeAtomicAlloc();
+		if (!dev.req) {
+			ret = -ENOMEM;
+			goto iteration_error;
+		}
+
+		ret = atomic_set_mode(&dev, next.pipes, next.pipe_count, true);
+		if (!ret)
+			ret = atomic_set_planes(&dev, next.plane_args, next.plane_count,
+						next.pictures, next.picture_count, false);
+		if (!ret)
+			ret = atomic_disable_unused(&dev, next.pipes, next.pipe_count,
+						    next.plane_args, next.plane_count);
+		if (!ret)
+			ret = drmModeAtomicCommit(dev.fd, dev.req, DRM_MODE_ATOMIC_ALLOW_MODESET,
+						  NULL);
+
+		drmModeAtomicFree(dev.req);
+		dev.req = NULL;
+		destroy_mode_blobs(&dev, &next);
+		if (ret)
+			goto iteration_error;
+
+		release_test_buffers(&dev, &current);
+		free_test_state(&current);
+		current = next;
+		memset(&next, 0, sizeof(next));
+
+		print_test_echoes(command);
+
+		ret = wait_interval(options->interval);
+		if (ret < 0)
+			goto iteration_error;
+		if (ret > 0)
+			break;
+
+		continue;
+
+iteration_error:
+		exit_error = ret;
+		if (dev.req)
+			drmModeAtomicFree(dev.req);
+		dev.req = NULL;
+		destroy_mode_blobs(&dev, &next);
+		release_test_buffers(&dev, &next);
+		free_test_state(&next);
+		break;
+	}
+
+	dev.req = drmModeAtomicAlloc();
+	if (dev.req) {
+		ret = atomic_disable_unused(&dev, NULL, 0, NULL, 0);
+		if (ret) {
+			fprintf(stderr, "failed to build cleanup request: %s\n", strerror(-ret));
+		} else {
+			ret = drmModeAtomicCommit(dev.fd, dev.req,
+						  DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
+			if (ret)
+				fprintf(stderr, "failed to clear script state: %s\n",
+					strerror(errno));
+		}
+		drmModeAtomicFree(dev.req);
+		dev.req = NULL;
+	} else {
+		ret = -ENOMEM;
+	}
+
+cleanup:
+	destroy_mode_blobs(&dev, &current);
+	destroy_mode_blobs(&dev, &next);
+	release_test_buffers(&dev, &current);
+	release_test_buffers(&dev, &next);
+	free_test_state(&current);
+	free_test_state(&next);
+	free(device);
+	free(module);
+	ovl_script_free(&script);
+
+	if (dev.resources)
+		free_resources(dev.resources);
+
+	if (dev.fd >= 0)
+		drmClose(dev.fd);
+
+	return ret || exit_error ? 1 : 0;
 }
 
 int main(int argc, char **argv)
 {
 	struct device dev;
 	struct test_state state = {};
+	struct ovl_script_options script_options;
 	unsigned int i;
 	struct plane_arg *c_plane_args = NULL;
 	unsigned int c_plane_count = 0;
@@ -2486,14 +2781,26 @@ int main(int argc, char **argv)
 
 	memset(&dev, 0, sizeof dev);
 
-	ret = parse_test_options(argc, argv, &state);
+	ret = ovl_script_parse_options(argc, argv, &script_options);
 	if (ret) {
-		usage(argv[0]);
+		usage(argv[0], 1);
 		exit_code = 1;
 		goto cleanup;
 	}
 
-	ret = setup_device(&dev, state.device, state.module);
+	if (script_options.script) {
+		exit_code = run_script(&script_options);
+		goto cleanup;
+	}
+
+	ret = parse_test_options(argc, argv, &state);
+	if (ret) {
+		usage(argv[0], 0);
+		exit_code = 1;
+		goto cleanup;
+	}
+
+	ret = setup_device(&dev, state.device, state.module, false);
 	if (ret) {
 		exit_code = 1;
 		goto cleanup;

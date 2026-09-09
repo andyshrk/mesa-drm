@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <unistd.h>
 
 struct variable {
 	char *name;
@@ -81,21 +82,6 @@ void ovl_script_free(struct ovl_script *script)
 	memset(script, 0, sizeof(*script));
 }
 
-int ovl_script_parse_interval(const char *value, double *seconds)
-{
-	char *end;
-	double parsed;
-
-	errno = 0;
-	parsed = strtod(value, &end);
-	if (errno || end == value || *end != '\0' || !isfinite(parsed) ||
-	    parsed < 0.0 || parsed > INT32_MAX)
-		return -EINVAL;
-
-	*seconds = parsed;
-	return 0;
-}
-
 bool ovl_id_is_used(const uint32_t *ids, size_t count, uint32_t id)
 {
 	size_t i;
@@ -106,6 +92,108 @@ bool ovl_id_is_used(const uint32_t *ids, size_t count, uint32_t id)
 	}
 
 	return false;
+}
+
+int ovl_script_parse_options(int argc, char **argv, struct ovl_script_options *options)
+{
+	char *end;
+	int option;
+
+	options->script = NULL;
+	options->interval = 2.0;
+
+	if (argc < 2 || strcmp(argv[1], "-S"))
+		return 0;
+
+	options->interval = -1.0;
+	optind = 1;
+	opterr = 0;
+
+	while ((option = getopt(argc, argv, "S:i:")) != -1) {
+		switch (option) {
+		case 'S':
+			if (options->script)
+				return -EINVAL;
+
+			options->script = optarg;
+			break;
+		case 'i':
+			if (options->interval >= 0.0)
+				return -EINVAL;
+
+			options->interval = strtod(optarg, &end);
+			if (end == optarg || *end != '\0' ||
+			    !(options->interval >= 0.0 && options->interval <= INT32_MAX))
+				return -EINVAL;
+
+			break;
+		default:
+			return -EINVAL;
+		}
+	}
+
+	if (optind != argc)
+		return -EINVAL;
+
+	if (options->interval < 0.0)
+		options->interval = 2.0;
+
+	return 0;
+}
+
+int ovl_script_check_commands(const struct ovl_script *script,
+			      ovl_script_check_command_fn check_command,
+			      char **device, char **module)
+{
+	const char *next_device;
+	const char *next_module;
+	size_t checked_commands = 0;
+	size_t i;
+	int ret = 0;
+
+	*device = NULL;
+	*module = NULL;
+
+	for (i = 0; i < script->test_count; i++) {
+		next_device = NULL;
+		next_module = NULL;
+		ret = check_command(&script->tests[i], &next_device, &next_module);
+		if (ret)
+			break;
+
+		if (!checked_commands) {
+			if (next_device) {
+				*device = strdup(next_device);
+				if (!*device) {
+					ret = -ENOMEM;
+					break;
+				}
+			}
+			if (next_module) {
+				*module = strdup(next_module);
+				if (!*module) {
+					ret = -ENOMEM;
+					break;
+				}
+			}
+			checked_commands = 1;
+		} else if (!!next_device != !!*device ||
+			   (next_device && strcmp(next_device, *device)) ||
+			   !!next_module != !!*module ||
+			   (next_module && strcmp(next_module, *module))) {
+			ret = -EINVAL;
+			break;
+		}
+	}
+
+	if (ret) {
+		free(*device);
+		free(*module);
+		*device = NULL;
+		*module = NULL;
+	}
+
+	return ret;
 }
 
 static char *trim(char *line)

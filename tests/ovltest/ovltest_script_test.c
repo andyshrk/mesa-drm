@@ -148,19 +148,117 @@ static void test_parse_error_line(void)
 	unlink(path);
 }
 
-static void test_interval(void)
+static void test_script_options(void)
 {
-	double seconds;
+	struct ovl_script_options options;
+	char program[] = "ovltest";
+	char opt_s[] = "-S";
+	char opt_i[] = "-i";
+	char opt_m[] = "-M";
+	char opt_f[] = "-F";
+	char script[] = "script.sh";
+	char half[] = "0.5";
+	char module[] = "rockchip";
+	char one[] = "one.sh";
+	char two[] = "two.sh";
+	char positional[] = "extra";
+	char one_second[] = "1s";
+	char negative_one[] = "-1";
+	char nan_value[] = "nan";
+	char huge_value[] = "1e100";
+	char *sequential[] = { program, opt_s, script };
+	char *normal[] = { program, opt_m, module };
+	char *normal_operand[] = { program, opt_f, opt_s };
+	char *interval_first[] = { program, opt_i, half, opt_s, script };
+	char *repeated[] = { program, opt_s, one, opt_s, two };
+	char *repeated_interval[] = { program, opt_s, script, opt_i, half, opt_i, half };
+	char *missing[] = { program, opt_s };
+	char *unknown[] = { program, opt_s, script, opt_m, module };
+	char *extra[] = { program, opt_s, script, positional };
+	char *option_like_path[] = { program, opt_s, opt_s };
+	char *invalid_suffix[] = { program, opt_s, script, opt_i, one_second };
+	char *invalid_negative[] = { program, opt_s, script, opt_i, negative_one };
+	char *invalid_nan[] = { program, opt_s, script, opt_i, nan_value };
+	char *invalid_range[] = { program, opt_s, script, opt_i, huge_value };
 
-	assert(ovl_script_parse_interval("2", &seconds) == 0);
-	assert(seconds == 2.0);
-	assert(ovl_script_parse_interval("0.5", &seconds) == 0);
-	assert(seconds == 0.5);
-	assert(ovl_script_parse_interval("0", &seconds) == 0);
-	assert(ovl_script_parse_interval("-1", &seconds) == -EINVAL);
-	assert(ovl_script_parse_interval("1s", &seconds) == -EINVAL);
-	assert(ovl_script_parse_interval("nan", &seconds) == -EINVAL);
-	assert(ovl_script_parse_interval("1e100", &seconds) == -EINVAL);
+	assert(ovl_script_parse_options(3, sequential, &options) == 0);
+	assert(strcmp(options.script, "script.sh") == 0);
+	assert(options.interval == 2.0);
+
+	assert(ovl_script_parse_options(3, normal, &options) == 0);
+	assert(options.script == NULL);
+	assert(options.interval == 2.0);
+
+	assert(ovl_script_parse_options(3, normal_operand, &options) == 0);
+	assert(options.script == NULL);
+	assert(options.interval == 2.0);
+
+	assert(ovl_script_parse_options(5, interval_first, &options) == 0);
+	assert(options.script == NULL);
+	assert(options.interval == 2.0);
+
+	assert(ovl_script_parse_options(5, repeated, &options) == -EINVAL);
+	assert(ovl_script_parse_options(7, repeated_interval, &options) == -EINVAL);
+	assert(ovl_script_parse_options(2, missing, &options) == -EINVAL);
+	assert(ovl_script_parse_options(5, unknown, &options) == -EINVAL);
+	assert(ovl_script_parse_options(4, extra, &options) == -EINVAL);
+
+	assert(ovl_script_parse_options(3, option_like_path, &options) == 0);
+	assert(strcmp(options.script, "-S") == 0);
+	assert(options.interval == 2.0);
+
+	assert(ovl_script_parse_options(5, invalid_suffix, &options) == -EINVAL);
+	assert(ovl_script_parse_options(5, invalid_negative, &options) == -EINVAL);
+	assert(ovl_script_parse_options(5, invalid_nan, &options) == -EINVAL);
+	assert(ovl_script_parse_options(5, invalid_range, &options) == -EINVAL);
+}
+
+static int check_same_target(const struct ovl_script_test *test,
+			     const char **device, const char **module)
+{
+	(void)test;
+	*device = "/dev/dri/card0";
+	*module = "rockchip";
+	return 0;
+}
+
+static int check_other_target(const struct ovl_script_test *test,
+			      const char **device, const char **module)
+{
+	*device = test->selector == 1 ? "/dev/dri/card0" : "/dev/dri/card1";
+	*module = "rockchip";
+	return 0;
+}
+
+static int check_failed(const struct ovl_script_test *test,
+			const char **device, const char **module)
+{
+	(void)test;
+	*device = "/dev/dri/card0";
+	*module = "rockchip";
+	return -EINVAL;
+}
+
+static void test_check_commands(void)
+{
+	struct ovl_script_test tests[] = { { .selector = 1 }, { .selector = 2 } };
+	struct ovl_script script = { .tests = tests, .test_count = 2 };
+	char *device = NULL;
+	char *module = NULL;
+
+	assert(ovl_script_check_commands(&script, check_same_target, &device, &module) == 0);
+	assert(strcmp(device, "/dev/dri/card0") == 0);
+	assert(strcmp(module, "rockchip") == 0);
+	free(device);
+	free(module);
+
+	device = NULL;
+	module = NULL;
+	assert(ovl_script_check_commands(&script, check_other_target, &device, &module) == -EINVAL);
+	assert(device == NULL && module == NULL);
+
+	assert(ovl_script_check_commands(&script, check_failed, &device, &module) == -EINVAL);
+	assert(device == NULL && module == NULL);
 }
 
 static void test_id_lookup(void)
@@ -336,7 +434,8 @@ int main(int argc, char **argv)
 	test_parse_sample_script();
 	test_parse_edge_cases();
 	test_parse_error_line();
-	test_interval();
+	test_script_options();
+	test_check_commands();
 	test_id_lookup();
 	test_full_plane_selection();
 	test_parse_variable_forms_and_quoted_path();

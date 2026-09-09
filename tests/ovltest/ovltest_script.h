@@ -43,10 +43,20 @@ struct ovl_script {
 	size_t test_count;
 };
 
+struct ovl_script_options {
+	const char *script;
+	double interval;
+};
+
+typedef int (*ovl_script_check_command_fn)(const struct ovl_script_test *test,
+					   const char **device, const char **module);
+
 int ovl_script_parse_file(const char *path, struct ovl_script *script,
 			  char *error, size_t error_size);
 void ovl_script_free(struct ovl_script *script);
-int ovl_script_parse_interval(const char *value, double *seconds);
 bool ovl_id_is_used(const uint32_t *ids, size_t count, uint32_t id);
+int ovl_script_parse_options(int argc, char **argv, struct ovl_script_options *options);
+int ovl_script_check_commands(const struct ovl_script *script,
+			      ovl_script_check_command_fn check_command, char **device, char **module);
 
 #endif

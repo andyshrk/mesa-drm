@@ -75,10 +75,103 @@ static void test_partial_mode_failure(void)
 	free_test_state(&state);
 }
 
+static void test_optional_properties(void)
+{
+	drmModeRes res = {};
+	drmModePlaneRes plane_res = { .count_planes = 1 };
+	drmModePlane plane = { .plane_id = 1 };
+	drmModeObjectProperties props = {};
+	drmModePropertyRes rotation = { .prop_id = 2, .name = "rotation" };
+	drmModePropertyRes *info[] = { &rotation };
+	uint32_t ids[] = { 2 };
+	struct plane planes[] = { { .plane = &plane, .props = &props, .props_info = info } };
+	struct resources resources = { .res = &res, .plane_res = &plane_res, .planes = planes };
+	struct device dev = { .resources = &resources };
+
+	assert(add_property(&dev, 1, "rotation", DRM_MODE_ROTATE_0) < 0);
+	assert(add_property(&dev, 1, "zpos", 1) < 0);
+	assert(add_property_optional(&dev, 1, "rotation", DRM_MODE_ROTATE_0) == 0);
+	assert(add_property_optional(&dev, 1, "zpos", 1) == 0);
+	assert(add_property_optional(&dev, 1, "test_optional", 0) == 0);
+	assert(add_property(&dev, 1, "rotation", DRM_MODE_ROTATE_90) < 0);
+	assert(add_property(&dev, 1, "FB_ID", 1) < 0);
+	assert(add_property_optional(&dev, 2, "rotation", DRM_MODE_ROTATE_0) < 0);
+	planes[0].props = NULL;
+	assert(add_property_optional(&dev, 1, "rotation", DRM_MODE_ROTATE_0) < 0);
+	planes[0].props = &props;
+	assert(property_calls == 0);
+	props.count_props = 1;
+	props.props = ids;
+	assert(add_property(&dev, 1, "rotation", DRM_MODE_ROTATE_0) == 0);
+	assert(add_property_optional(&dev, 1, "rotation", DRM_MODE_ROTATE_0) == 0);
+	property_error = -ENOMEM;
+	assert(add_property(&dev, 1, "rotation", DRM_MODE_ROTATE_0) < 0);
+	assert(add_property_optional(&dev, 1, "rotation", DRM_MODE_ROTATE_0) < 0);
+	assert(property_calls == 4);
+	property_error = 0;
+}
+
+static void test_check_script_command_ids(void)
+{
+	char program[] = "ovltest";
+	char opt_s[] = "-s";
+	char opt_p[] = "-P";
+	char good[] = "10@20:800x600";
+	char bad[] = "@20:800x600";
+	char plane[] = "@20:800x600";
+	char *argv[] = { program, opt_s, bad, NULL, NULL, NULL };
+	struct ovl_script_test test = { .argc = 3, .argv = argv };
+	const char *device = NULL;
+	const char *module = NULL;
+
+	assert(check_script_command(&test, &device, &module) == -EINVAL);
+	argv[2] = good;
+	assert(check_script_command(&test, &device, &module) == 0);
+	argv[3] = opt_p;
+	argv[4] = plane;
+	test.argc = 5;
+	assert(check_script_command(&test, &device, &module) == -EINVAL);
+}
+
+static void test_stop_wait(void)
+{
+	sigset_t blocked;
+	sigset_t previous;
+	pid_t child;
+	int status;
+
+	signal(SIGINT, handle_signal);
+	signal(SIGTERM, handle_signal);
+	stop_requested = 1;
+	assert(wait_interval(60) == 1);
+	stop_requested = 0;
+	assert(wait_interval(0.01) == 0);
+	sigemptyset(&blocked);
+	sigaddset(&blocked, SIGTERM);
+	assert(sigprocmask(SIG_BLOCK, &blocked, &previous) == 0);
+	assert(raise(SIGTERM) == 0);
+	assert(sigprocmask(SIG_SETMASK, &previous, NULL) == 0);
+	assert(wait_interval(60) == 1);
+	stop_requested = 0;
+	child = fork();
+	assert(child >= 0);
+	if (!child) {
+		usleep(20000);
+		kill(getppid(), SIGINT);
+		_exit(0);
+	}
+	assert(wait_interval(60) == 1);
+	assert(waitpid(child, &status, 0) == child);
+	assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+
 int main(void)
 {
+	test_optional_properties();
 	test_writeback_mode_failure();
 	test_partial_mode_failure();
+	test_check_script_command_ids();
+	test_stop_wait();
 	puts("ovltest state tests: PASS");
 	return 0;
 }
