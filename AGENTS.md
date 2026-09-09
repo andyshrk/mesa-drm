@@ -23,6 +23,13 @@ names, and driver prefixes for driver APIs, for example `amdgpu_*` or
 `drmMode*`. Keep public ABI changes minimal and intentional. For Meson files,
 follow existing two-space indentation and option naming in `meson_options.txt`.
 
+- Allow C code lines up to 100 columns, counting tabs as 8-column tab stops.
+  Do not wrap conditions or expressions solely to satisfy an 80-column limit
+  when they remain readable within 100 columns.
+- Declare local variables together at the beginning of the function, before
+  executable statements. Avoid declarations inside loops or switch cases;
+  assign values at the point of use instead.
+
 ## Testing Guidelines
 
 Add or update tests under the relevant `tests/<area>/` directory, then register
@@ -36,6 +43,12 @@ Commit subjects use an area prefix followed by a short imperative summary, for
 example `tests/wbtest: Add -w flag for optional file writeback` or
 `amdgpu: Use uint32_t for buffer lookup index`. Explain what changed and why in
 the body when behavior or ABI is affected.
+
+Follow Linux kernel commit message style: keep the subject and body concise,
+explain the reason for the change, and omit details already clear from the
+diff. Wrap commit message text at about 75 columns; the 100-column code limit
+does not apply to commit messages. For command-line interface changes, include
+a short usage example in the body.
 
 ## Important Notes
 - When working with APIs provided by libdrm, if the exact behavior of an API is unclear, refer to its implementation code. If you encounter ioctl-related calls within that implementation, consult the @../linux source code to further analyze the behavior of the ioctl.
