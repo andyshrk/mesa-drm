@@ -119,9 +119,10 @@ int main(int argc, char **argv)
 	uint32_t height = CURSOR_HEIGHT;
 	uint32_t crtc_id = 0;
 	uint32_t delay = 16;
-	uint32_t x = 0;
-	uint32_t y = 200;
-	uint32_t step = 8;
+	int32_t x = 0;
+	int32_t y = 0;
+	int32_t step = 8;
+	int32_t y_step;
 	uint32_t hdisplay = 0;
 	uint32_t vdisplay = 0;
 	uint32_t handle;
@@ -131,6 +132,8 @@ int main(int argc, char **argv)
 	uint32_t *pixels;
 	int *ptr;
 	int c;
+	int moving_right = 1;
+	int moving_down = 1;
 	char *device = NULL;
 	char *module = NULL;
 	struct drm_mode_map_dumb map_arg;
@@ -239,20 +242,27 @@ int main(int argc, char **argv)
 
 	drmModeSetCursor(dev.fd, crtc_id, handle, width, height);
 
-	while (hdisplay) {
-		if (x >= hdisplay) {
-			x = hdisplay;
-			step = -8;
-		}
+	y_step = height > 1 ? height / 2 : 1;
 
-		if (x <= 0) {
-			x = 0;
-			step = 8;
-		}
-
+	while (hdisplay && vdisplay) {
 		drmModeMoveCursor(dev.fd, crtc_id, x, y);
 
-		x += step;
+		if ((moving_right && x >= (int32_t)hdisplay) || (!moving_right && x <= 0)) {
+			moving_right = !moving_right;
+			if (y >= (int32_t)vdisplay)
+				moving_down = 0;
+			else if (y <= 0)
+				moving_down = 1;
+
+			if (moving_down)
+				y += y_step;
+			else
+				y -= y_step;
+		} else if (moving_right) {
+			x += step;
+		} else {
+			x -= step;
+		}
 
 		usleep(delay*1000);
 	}
