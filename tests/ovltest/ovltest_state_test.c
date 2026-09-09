@@ -59,7 +59,7 @@ static void test_partial_mode_failure(void)
 	struct connector connectors[] = { { .connector = &connector } };
 	struct crtc crtcs[] = { { .crtc = &crtc } };
 	struct resources resources = { .res = &res, .connectors = connectors, .crtcs = crtcs };
-	struct device dev = { .resources = &resources, .use_atomic = 1 };
+	struct device dev = { .resources = &resources };
 	struct test_state state = {};
 	unsigned int calls = property_calls;
 

@@ -127,7 +127,6 @@ struct device {
 		struct bo *cursor_bo;
 	} mode;
 
-	int use_atomic;
 	drmModeAtomicReq *req;
 };
 
@@ -1122,7 +1121,6 @@ struct test_state {
 	int framebuffers;
 	int drop_master;
 	int test_vsync;
-	int use_atomic;
 	int dynamic_onoff;
 	bool one_shot;
 	bool error_monitor;
@@ -1196,15 +1194,11 @@ static bool set_property(struct device *dev, struct property_arg *p)
 
 	p->prop_id = props->props[i];
 
-	if (!dev->use_atomic)
-		ret = drmModeObjectSetProperty(dev->fd, p->obj_id, p->obj_type,
-									   p->prop_id, p->value);
-	else
-		ret = drmModeAtomicAddProperty(dev->req, p->obj_id, p->prop_id, p->value);
+	ret = drmModeAtomicAddProperty(dev->req, p->obj_id, p->prop_id, p->value);
 
 	if (ret < 0) {
 		fprintf(stderr, "failed to set %s %i property %s to %" PRIu64 ": %s\n",
-			obj_type, p->obj_id, p->name, p->value, dev->use_atomic ? strerror(-ret) : strerror(errno));
+			obj_type, p->obj_id, p->name, p->value, strerror(-ret));
 		return false;
 	}
 
@@ -2302,7 +2296,7 @@ static int parse_test_options(int argc, char **argv, struct test_state *state)
 
 		switch (c) {
 		case 'a':
-			state->use_atomic = 1;
+			args--;
 			break;
 		case 'c':
 			state->connectors = 1;
@@ -2386,7 +2380,7 @@ static int parse_test_options(int argc, char **argv, struct test_state *state)
 		}
 	}
 
-	if (!args || (args == 1 && state->use_atomic))
+	if (!args)
 		state->encoders = state->connectors = state->crtcs =
 			state->planes = state->framebuffers = 1;
 
@@ -2412,7 +2406,7 @@ static void usage(char *name)
 	fprintf(stderr, "\t-v\ttest vsynced page flipping\n");
 	fprintf(stderr, "\t-o\ttest dynamic turn on off plane one by one, run with -v mode\n");
 	fprintf(stderr, "\t-w <obj_id>:<prop_name>:<value>\tset property\n");
-	fprintf(stderr, "\t-a \tuse atomic API\n");
+	fprintf(stderr, "\t-a\tcompatibility option; atomic modesetting is always used\n");
 	fprintf(stderr, "\t-F pattern1,pattern2\tspecify fill patterns\n");
 
 	fprintf(stderr, "\n Generic options:\n\n");
@@ -2452,6 +2446,31 @@ static int pipe_resolve_connectors(struct device *dev, struct pipe_arg *pipe)
 	return 0;
 }
 
+/*
+ * Open the DRM device, require atomic modesetting, and load its resources.
+ */
+static int setup_device(struct device *dev, const char *device,
+			const char *module)
+{
+	int ret;
+
+	dev->fd = util_open(device, module);
+	if (dev->fd < 0)
+		return dev->fd;
+
+	ret = drmSetClientCap(dev->fd, DRM_CLIENT_CAP_ATOMIC, 1);
+	if (ret) {
+		fprintf(stderr, "no atomic modesetting support: %s\n", strerror(errno));
+		return ret;
+	}
+
+	dev->resources = get_resources(dev);
+	if (!dev->resources)
+		return -ENODEV;
+
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	struct device dev;
@@ -2474,9 +2493,9 @@ int main(int argc, char **argv)
 		goto cleanup;
 	}
 
-	dev.fd = util_open(state.device, state.module);
-	if (dev.fd < 0) {
-		exit_code = -1;
+	ret = setup_device(&dev, state.device, state.module);
+	if (ret) {
+		exit_code = 1;
 		goto cleanup;
 	}
 
@@ -2491,24 +2510,9 @@ int main(int argc, char **argv)
 
 	}
 
-	ret = drmSetClientCap(dev.fd, DRM_CLIENT_CAP_ATOMIC, 1);
-	if (ret && state.use_atomic) {
-		fprintf(stderr, "no atomic modesetting support: %s\n", strerror(errno));
-		exit_code = -1;
-		goto cleanup;
-	}
-
-	dev.use_atomic = 1;
-
 	if (state.test_vsync && !state.pipe_count) {
 		fprintf(stderr, "page flipping requires at least one -s option.\n");
 		exit_code = -1;
-		goto cleanup;
-	}
-
-	dev.resources = get_resources(&dev);
-	if (!dev.resources) {
-		exit_code = 1;
 		goto cleanup;
 	}
 
