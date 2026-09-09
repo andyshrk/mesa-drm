@@ -2392,7 +2392,7 @@ static int parse_test_options(int argc, char **argv, struct test_state *state)
 
 static void usage(char *name, int status)
 {
-	fprintf(stderr, "overlay test by Andy, libdrm version: 2.4.101\n");
+	fprintf(stderr, "overlay test by Andy, libdrm version: 2.4.134\n");
 	fprintf(stderr, "usage: %s [-acDdefMPpsCvw]\n", name);
 
 	fprintf(stderr, "\n Query options:\n\n");
