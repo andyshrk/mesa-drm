@@ -99,18 +99,19 @@ error:
 
 static void usage(char *name)
 {
-	fprintf(stderr, "usage: %s [-c crtc_id] [-p prefer_plane] [-d delay] [-D device] [-M module]\n", name);
+	fprintf(stderr, "usage: %s [-c crtc_id] [-p prefer_plane] [-d delay] [-s widthxheight] [-D device] [-M module]\n", name);
 	fprintf(stderr, "\n Test options:\n\n");
 	fprintf(stderr, "\t-c <crtc_id>\tselect CRTC (default: 0)\n");
 	fprintf(stderr, "\t-p <prefer_plane>\tset DRM_CURSOR_PREFER_PLANE\n");
 	fprintf(stderr, "\t-d <delay>\tcursor movement delay in milliseconds (default: 16)\n");
+	fprintf(stderr, "\t-s <width>x<height>\tcursor size in pixels (default: 64x64)\n");
 	fprintf(stderr, "\n Generic options:\n\n");
 	fprintf(stderr, "\t-D <device>\tuse the given device\n");
 	fprintf(stderr, "\t-M <module>\tuse the given driver\n");
 	fprintf(stderr, "\t-h\tshow this help\n");
 }
 
-static char optstr[] = "c:p:d:D:M:h";
+static char optstr[] = "c:p:d:s:D:M:h";
 
 int main(int argc, char **argv)
 {
@@ -126,6 +127,8 @@ int main(int argc, char **argv)
 	uint32_t handle;
 	uint32_t size;
 	uint32_t i;
+	uint32_t row;
+	uint32_t *pixels;
 	int *ptr;
 	int c;
 	char *device = NULL;
@@ -134,8 +137,6 @@ int main(int argc, char **argv)
 	struct device dev;
 
 	struct drm_mode_create_dumb create_arg = {
-		.width = width,
-		.height = height,
 		.bpp = 32,
 	};
 
@@ -153,6 +154,27 @@ int main(int argc, char **argv)
 		case 'd':
 			delay = atoi(optarg);
 			break;
+		case 's': {
+			char *end;
+			const char *p = optarg;
+			unsigned long w, h;
+
+			errno = 0;
+			w = strtoul(p, &end, 10);
+			if (errno || *p < '0' || *p > '9' || *end != 'x' || !w || w > UINT32_MAX) {
+				fprintf(stderr, "invalid cursor size: %s\n", optarg);
+				return 1;
+			}
+			p = end + 1;
+			h = strtoul(p, &end, 10);
+			if (errno || *p < '0' || *p > '9' || *end || !h || h > UINT32_MAX) {
+				fprintf(stderr, "invalid cursor size: %s\n", optarg);
+				return 1;
+			}
+			width = w;
+			height = h;
+			break;
+		}
 		case 'D':
 			device = optarg;
 			break;
@@ -183,7 +205,13 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	drmIoctl(dev.fd, DRM_IOCTL_MODE_CREATE_DUMB, &create_arg);
+	create_arg.width = width;
+	create_arg.height = height;
+	if (drmIoctl(dev.fd, DRM_IOCTL_MODE_CREATE_DUMB, &create_arg)) {
+		fprintf(stderr, "failed to create cursor buffer: %s\n", strerror(errno));
+		drmClose(dev.fd);
+		return 1;
+	}
 	handle = create_arg.handle;
 	size = create_arg.size;
 
@@ -193,8 +221,12 @@ int main(int argc, char **argv)
 
 	ptr = mmap(0, size, PROT_READ | PROT_WRITE, MAP_SHARED, dev.fd, map_arg.offset);
 
-	for (i = 0; i < width * height; i++)
-		ptr[i] = 0x4F000000 | (i % width) * 2 << 16 | (i / height) << 8;
+	for (row = 0; row < height; row++) {
+		pixels = (uint32_t *)((char *)ptr + (size_t)row * create_arg.pitch);
+
+		for (i = 0; i < width; i++)
+			pixels[i] = 0x4F000000 | i * 2 << 16 | row << 8;
+	}
 
 	for (i = 0; i < dev.resources->count_crtcs; ++i) {
 		if (dev.resources->crtcs[i].crtc->crtc_id == crtc_id) {
