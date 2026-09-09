@@ -6,10 +6,13 @@ general-purpose display utility, it deliberately exposes plane formats,
 modifiers, source and destination rectangles, zpos, rotation, and raw buffer
 files so that an overlay pipeline can be exercised in a controlled way.
 
-The tool changes the state of the selected DRM device. Each test disables
-planes, CRTCs, and connectors not selected by its command line, including
-outputs enabled by other programs. Run it on a test system or through a remote
-session where temporarily changing the display mode and output is acceptable.
+The tool changes the state of the selected DRM device. In script loop modes
+(`-S` and `-R`), each test disables planes, CRTCs, and connectors not selected
+by its command line, including outputs enabled by other programs. Manual
+invocations leave unspecified objects unchanged, allowing tests such as
+writeback capture to run alongside another display application. Run script
+loops on a test system or through a remote session where temporarily changing
+the display mode and output is acceptable.
 
 ## Features
 

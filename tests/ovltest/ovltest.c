@@ -2934,14 +2934,6 @@ int main(int argc, char **argv)
 			goto cleanup;
 		}
 
-		ret = atomic_disable_unused(&dev, state.pipes, state.pipe_count,
-					    state.plane_args, state.plane_count);
-		if (ret) {
-			fprintf(stderr, "failed to disable unused objects\n");
-			exit_code = 1;
-			goto cleanup;
-		}
-
 		ret = drmModeAtomicCommit(dev.fd, dev.req, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
 		if (ret) {
 			fprintf(stderr, "Atomic Commit failed [1]\n");
@@ -2979,6 +2971,8 @@ int main(int argc, char **argv)
 					exit_code = 1;
 					goto cleanup;
 				}
+				atomic_clear_planes(&dev, &state.plane_args[c_plane_count],
+						    state.plane_count - c_plane_count);
 			} else {
 				ret = atomic_set_planes(&dev, state.plane_args, state.plane_count,
 							state.pictures,
@@ -2989,15 +2983,6 @@ int main(int argc, char **argv)
 					goto cleanup;
 				}
 			}
-			ret = atomic_disable_unused(&dev, state.pipes, state.pipe_count,
-						    state.plane_args, state.dynamic_onoff ?
-						    c_plane_count : state.plane_count);
-			if (ret) {
-				fprintf(stderr, "failed to disable unused objects\n");
-				exit_code = 1;
-				goto cleanup;
-			}
-
 			ret = drmModeAtomicCommit(dev.fd, dev.req, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
 			if (ret) {
 				fprintf(stderr, "Atomic Commit failed [2]\n");
