@@ -97,7 +97,22 @@ error:
 	return NULL;
 }
 
-int main(int argc, const char **argv)
+static void usage(char *name)
+{
+	fprintf(stderr, "usage: %s [-c crtc_id] [-p prefer_plane] [-d delay] [-D device] [-M module]\n", name);
+	fprintf(stderr, "\n Test options:\n\n");
+	fprintf(stderr, "\t-c <crtc_id>\tselect CRTC (default: 0)\n");
+	fprintf(stderr, "\t-p <prefer_plane>\tset DRM_CURSOR_PREFER_PLANE\n");
+	fprintf(stderr, "\t-d <delay>\tcursor movement delay in milliseconds (default: 16)\n");
+	fprintf(stderr, "\n Generic options:\n\n");
+	fprintf(stderr, "\t-D <device>\tuse the given device\n");
+	fprintf(stderr, "\t-M <module>\tuse the given driver\n");
+	fprintf(stderr, "\t-h\tshow this help\n");
+}
+
+static char optstr[] = "c:p:d:D:M:h";
+
+int main(int argc, char **argv)
 {
 	uint32_t width = CURSOR_WIDTH;
 	uint32_t height = CURSOR_HEIGHT;
@@ -112,6 +127,7 @@ int main(int argc, const char **argv)
 	uint32_t size;
 	uint32_t i;
 	int *ptr;
+	int c;
 	char *device = NULL;
 	char *module = NULL;
 	struct drm_mode_map_dumb map_arg;
@@ -124,6 +140,38 @@ int main(int argc, const char **argv)
 	};
 
 	memset(&dev, 0, sizeof dev);
+
+	opterr = 0;
+	while ((c = getopt(argc, argv, optstr)) != -1) {
+		switch (c) {
+		case 'c':
+			crtc_id = atoi(optarg);
+			break;
+		case 'p':
+			setenv("DRM_CURSOR_PREFER_PLANE", optarg, 1);
+			break;
+		case 'd':
+			delay = atoi(optarg);
+			break;
+		case 'D':
+			device = optarg;
+			break;
+		case 'M':
+			module = optarg;
+			break;
+		case 'h':
+			usage(argv[0]);
+			return 0;
+		default:
+			usage(argv[0]);
+			return 1;
+		}
+	}
+
+	if (optind < argc) {
+		usage(argv[0]);
+		return 1;
+	}
 
 	dev.fd = util_open(device, module);
 	if (dev.fd < 0)
@@ -147,15 +195,6 @@ int main(int argc, const char **argv)
 
 	for (i = 0; i < width * height; i++)
 		ptr[i] = 0x4F000000 | (i % width) * 2 << 16 | (i / height) << 8;
-
-	if (argc > 1)
-		crtc_id = atoi(argv[1]);
-
-	if (argc > 2)
-		setenv("DRM_CURSOR_PREFER_PLANE", argv[2], 1);
-
-	if (argc > 3)
-		delay = atoi(argv[3]);
 
 	for (i = 0; i < dev.resources->count_crtcs; ++i) {
 		if (dev.resources->crtcs[i].crtc->crtc_id == crtc_id) {
