@@ -178,6 +178,9 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 	case DRM_FORMAT_VUY888:
 		bpp = 24;
 		break;
+	case DRM_FORMAT_VUY101010:
+		bpp = 30;
+		break;
 	case DRM_FORMAT_ARGB4444:
 	case DRM_FORMAT_XRGB4444:
 	case DRM_FORMAT_ABGR4444:
@@ -321,6 +324,7 @@ ovl_bo_create(int fd, unsigned int format, bool is_afbc,
 	case DRM_FORMAT_YUV420_10BIT:
 	case DRM_FORMAT_Y210:
 	case DRM_FORMAT_VUY888:
+	case DRM_FORMAT_VUY101010:
 		offsets[0] = 0;
 		handles[0] = bo->handle;
 		pitches[0] = bo->pitch;
